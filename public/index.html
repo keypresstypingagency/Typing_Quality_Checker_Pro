@@ -169,20 +169,20 @@ select{width:100%;padding:10px;border:1px solid #ccd5e2;border-radius:7px;backgr
 </div>
 <label for="aiProviders" style="margin-top:12px">AI Provider নির্বাচন</label>
 <select id="aiProviders">
-  <option value="chatgpt,gemini,ocrspace" selected>ChatGPT + Gemini + OCR.space (সবগুলো)</option>
-  <option value="gemini,tesseract,ocrspace">Gemini + Tesseract Free + OCR.space</option>
-  <option value="tesseract">শুধু Tesseract (Free Bengali OCR)</option>
-  <option value="gemini,tesseract">Gemini + Tesseract (Free)</option>
+  <option value="gemini,tesseract,ocrspace" selected>Gemini + Tesseract + OCR.space (সবগুলো)</option>
+  <option value="tesseract">শুধু Tesseract (নিজস্ব ফ্রি সার্ভার)</option>
+  <option value="gemini,tesseract">Gemini + Tesseract</option>
   <option value="tesseract,ocrspace">Tesseract + OCR.space</option>
+  <option value="gemini,ocrspace">Gemini + OCR.space</option>
+  <option value="chatgpt,gemini,ocrspace">ChatGPT + Gemini + OCR.space</option>
   <option value="chatgpt">শুধু ChatGPT</option>
   <option value="gemini">শুধু Gemini</option>
   <option value="ocrspace">শুধু OCR.space</option>
   <option value="chatgpt,gemini">ChatGPT + Gemini</option>
   <option value="chatgpt,ocrspace">ChatGPT + OCR.space</option>
-  <option value="gemini,ocrspace">Gemini + OCR.space</option>
   <option value="other">শুধু Other AI (কনফিগার করা থাকলে)</option>
 </select>
-<p class="muted">টিক দিলে শুধু নির্বাচিত AI Provider দিয়ে PDF/JPG/PNG পড়া হবে। ChatGPT + Gemini + OCR.space একসঙ্গে চালাতে পারবেন। কোনো AI ব্যর্থ হলে অন্য নির্বাচিত AI-গুলোর ফলাফল পাওয়া গেলে সেগুলো দেখাবে; Traditional OCR-এ fallback হবে না। টিক না থাকলে আগের Tesseract OCR চলবে। API Key Backend-এ রাখতে হবে।</p>
+<p class="muted">নির্বাচিত Provider দিয়ে OCR করা হবে। Tesseract আপনার নিজস্ব সার্ভারে চলবে এবং বাংলা, English, Arabic, Urdu ও Farsi সমর্থন করবে। একাধিক Provider নির্বাচন করলে ফলাফল তুলনা করতে পারবেন। AI OCR বন্ধ থাকলে আগের Traditional OCR চালু থাকবে। API Key Backend-এ রাখতে হবে।</p>
 </div>
 
 </div>
@@ -1325,56 +1325,68 @@ return match?match[1]:null;
    TOKEN DATA
 ===================================== */
 
+/*
+  তুলনার জন্য শব্দের দুই পাশের যতিচিহ্ন/ফরম্যাটিং চিহ্ন বাদ দেওয়া হয়,
+  যাতে "লীলাভূমি" এবং "লীলাভূমি।" একই শব্দ হিসেবে মেলে।
+  বাংলা/ইংরেজি অক্ষর, সংখ্যা ও শব্দের ভেতরের চিহ্ন অক্ষত থাকে।
+  কপি করা ডকুমেন্টের Wingdings/Private-Use bullet-ও উপেক্ষা করা হয়।
+*/
+function getComparisonKey(value){
+  let key=String(value||"")
+    .normalize("NFC")
+    .replace(/[\u200B-\u200D\uFEFF]/g,"")
+    .replace(/[\uE000-\uF8FF]/g,"")
+    .replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu,"");
+
+  // Formatting-only fragments such as "*%" or decorative symbols
+  // should not create false Missing/Extra words. Keep real math operators.
+  if(!key){
+    const original=String(value||"").normalize("NFC");
+    if(/^[+\-−×÷=<>≤≥*/^√∑∫%]$/u.test(original)) return original;
+    return "";
+  }
+
+  // English case differences should not count as typing errors.
+  if(/[A-Za-z]/.test(key)) key=key.toLocaleLowerCase("en-US");
+  return key;
+}
+
 function getWordData(text){
 
 const normalized=normalizeText(text);
-
 const lines=normalized.split("\n");
-
 const tokens=[];
-
 let currentQuestion=null;
 let currentOption=null;
 
 lines.forEach((line,lineIndex)=>{
+  const detectedQuestion=detectQuestionStart(line);
+  if(detectedQuestion){
+    currentQuestion=detectedQuestion;
+    currentOption=null;
+  }
 
-const detectedQuestion=detectQuestionStart(line);
+  const words=line.split(/\s+/u).filter(Boolean);
+  words.forEach((word,wordInLine)=>{
+    const key=getComparisonKey(word);
+    if(!key) return;
 
-if(detectedQuestion){
-currentQuestion=detectedQuestion;
-currentOption=null;
-}
+    const detectedOption=detectOptionStart(word);
+    if(detectedOption) currentOption=detectedOption;
 
-const words=line.split(/\s+/u).filter(Boolean);
-
-words.forEach((word,wordInLine)=>{
-
-const detectedOption=detectOptionStart(word);
-
-if(detectedOption){
-currentOption=detectedOption;
-}
-
-tokens.push({
-
-word,
-key:word.normalize("NFC"),
-lineIndex,
-wordInLine,
-position:tokens.length+1,
-questionNumber:currentQuestion,
-optionNumber:currentOption
-
+    tokens.push({
+      word,
+      key,
+      lineIndex,
+      wordInLine,
+      position:tokens.length+1,
+      questionNumber:currentQuestion,
+      optionNumber:currentOption
+    });
+  });
 });
 
-});
-
-});
-
-return {
-lines,
-tokens
-};
+return {lines,tokens};
 }
 
 /* =====================================
@@ -1552,6 +1564,9 @@ lineIndex<=group.end
 ){
 
 const rendered=words.map(word=>{
+
+// Formatting-only tokens are visible but do not shift word positions.
+if(!getComparisonKey(word)) return escapeHTML(word);
 
 const position=globalPosition++;
 
