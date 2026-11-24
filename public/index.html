@@ -35,6 +35,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .success{color:#087b58}
 .question-context{margin-top:10px;padding:12px;background:#f8fafc;border:1px solid #e1e7f0;border-radius:8px;white-space:pre-wrap;line-height:1.9;font-size:14px}
 .missing-mark{color:#c0392b;background:#ffe5e5;border-bottom:2px solid #c0392b;font-weight:bold;padding:1px 2px;border-radius:3px}
+.spelling-mark{color:#8a5a00;background:#fff1bd;border-bottom:2px solid #d99b00;font-weight:bold;padding:1px 2px;border-radius:3px}
+.spelling-info{background:#fffaf0;border:1px solid #f2d58a;padding:10px;border-radius:7px;margin-top:8px;line-height:1.8}
+.extra-line{margin:9px 0;padding:9px 11px;background:#f4f8ff;border-left:3px solid #3977d5;border-radius:4px;line-height:1.8;overflow-wrap:anywhere}
+.symbol-note{background:#f8fafc;border:1px solid #e1e7f0;padding:10px;border-radius:7px;margin-top:10px}
 .question-label{display:block;margin-bottom:8px;color:#172b4d}
 .progress{background:#e8edf5;border-radius:20px;height:9px;overflow:hidden;margin:12px 0}
 .progress div{height:100%;width:0;background:#1765d1;transition:width .2s}
@@ -1333,150 +1337,175 @@ return match?match[1]:null;
   বাংলা/ইংরেজি অক্ষর, সংখ্যা ও শব্দের ভেতরের চিহ্ন অক্ষত থাকে।
   কপি করা ডকুমেন্টের Wingdings/Private-Use bullet-ও উপেক্ষা করা হয়।
 */
-function getComparisonKey(value){
-  let key=String(value||"")
-    .normalize("NFC")
+function normalizeComparisonText(value){
+  let text=String(value||"").normalize("NFC")
     .replace(/[\u200B-\u200D\uFEFF]/g,"")
+    .replace(/[\u0640]/g,"")                 // Arabic tatweel
+    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g,""); // Arabic marks
+
+  // Bengali yeh variants: কোথায় / কোথায়
+  text=text.replace(/য\u09BC/g,"য়");
+
+  // Normalize Bengali, Arabic-Indic and Persian digits to ASCII.
+  text=text.replace(/[০-৯٠-٩۰-۹]/g,ch=>{
+    const cp=ch.codePointAt(0);
+    if(cp>=0x09E6&&cp<=0x09EF) return String(cp-0x09E6);
+    if(cp>=0x0660&&cp<=0x0669) return String(cp-0x0660);
+    if(cp>=0x06F0&&cp<=0x06F9) return String(cp-0x06F0);
+    return ch;
+  });
+
+  // Common Arabic/Persian keyboard variants.
+  text=text.replace(/[يى]/g,"ی").replace(/ك/g,"ک");
+  return text;
+}
+
+function getComparisonKey(value){
+  let key=normalizeComparisonText(value)
     .replace(/[\uE000-\uF8FF]/g,"")
     .replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu,"");
 
-  // Formatting-only fragments such as "*%" or decorative symbols
-  // should not create false Missing/Extra words. Keep real math operators.
-  if(!key){
-    const original=String(value||"").normalize("NFC");
-    if(/^[+\-−×÷=<>≤≥*/^√∑∫%]$/u.test(original)) return original;
-    return "";
-  }
+  if(!key) return "";
 
-  // English case differences should not count as typing errors.
+  // Standalone percent / decorative marks are not words; avoid OCR artefacts
+  // such as a stray '%' becoming a false Missing/Extra word.
+  if(/^[%٪•·▪▫■□◆◇★☆]+$/u.test(key)) return "";
+
   if(/[A-Za-z]/.test(key)) key=key.toLocaleLowerCase("en-US");
   return key;
 }
 
 function getWordData(text){
+  const normalized=normalizeText(text);
+  const lines=normalized.split("\n");
+  const tokens=[];
+  let currentQuestion=null;
+  let currentOption=null;
 
-const normalized=normalizeText(text);
-const lines=normalized.split("\n");
-const tokens=[];
-let currentQuestion=null;
-let currentOption=null;
+  lines.forEach((line,lineIndex)=>{
+    const detectedQuestion=detectQuestionStart(line);
+    if(detectedQuestion){
+      currentQuestion=detectedQuestion;
+      currentOption=null;
+    }
 
-lines.forEach((line,lineIndex)=>{
-  const detectedQuestion=detectQuestionStart(line);
-  if(detectedQuestion){
-    currentQuestion=detectedQuestion;
-    currentOption=null;
-  }
-
-  const words=line.split(/\s+/u).filter(Boolean);
-  words.forEach((word,wordInLine)=>{
-    const key=getComparisonKey(word);
-    if(!key) return;
-
-    const detectedOption=detectOptionStart(word);
-    if(detectedOption) currentOption=detectedOption;
-
-    tokens.push({
-      word,
-      key,
-      lineIndex,
-      wordInLine,
-      position:tokens.length+1,
-      questionNumber:currentQuestion,
-      optionNumber:currentOption
+    const words=line.split(/\s+/u).filter(Boolean);
+    words.forEach((word,wordInLine)=>{
+      const key=getComparisonKey(word);
+      if(!key) return;
+      const detectedOption=detectOptionStart(word);
+      if(detectedOption) currentOption=detectedOption;
+      tokens.push({
+        word,key,lineIndex,wordInLine,
+        position:tokens.length+1,
+        questionNumber:currentQuestion,
+        optionNumber:currentOption
+      });
     });
   });
-});
+  return {lines,tokens};
+}
 
-return {lines,tokens};
+function editDistance(a,b){
+  const A=Array.from(a), B=Array.from(b);
+  if(Math.abs(A.length-B.length)>3) return 99;
+  let prev=Array.from({length:B.length+1},(_,i)=>i);
+  for(let i=1;i<=A.length;i++){
+    const cur=[i];
+    let rowMin=i;
+    for(let j=1;j<=B.length;j++){
+      const cost=A[i-1]===B[j-1]?0:1;
+      cur[j]=Math.min(cur[j-1]+1,prev[j]+1,prev[j-1]+cost);
+      rowMin=Math.min(rowMin,cur[j]);
+    }
+    if(rowMin>3) return 99;
+    prev=cur;
+  }
+  return prev[B.length];
+}
+
+function scriptFamily(value){
+  if(/[\u0980-\u09FF]/u.test(value)) return "bn";
+  if(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/u.test(value)) return "ar";
+  if(/[A-Za-z]/u.test(value)) return "latin";
+  return "other";
+}
+
+function isPossibleSpellingPair(originalWord,typedWord){
+  const a=getComparisonKey(originalWord);
+  const b=getComparisonKey(typedWord);
+  if(!a||!b||a===b) return false;
+  const familyA=scriptFamily(a), familyB=scriptFamily(b);
+  if(familyA!==familyB||familyA==="other") return false;
+  const lenA=Array.from(a).length, lenB=Array.from(b).length;
+  const maxLen=Math.max(lenA,lenB), minLen=Math.min(lenA,lenB);
+  if(minLen<4||maxLen>24) return false;
+  const distance=editDistance(a,b);
+  const similarity=1-distance/maxLen;
+  return distance<=2 && similarity>=0.78;
 }
 
 /* =====================================
-   TOKEN DIFF
+   ADVANCED TOKEN DIFF
 ===================================== */
-
 function compareWordsFast(original,typed){
+  if(!window.Diff) throw new Error("Comparison Library লোড হয়নি।");
 
-if(!window.Diff){
-throw new Error("Comparison Library লোড হয়নি।");
-}
+  const originalData=getWordData(original);
+  const typedData=getWordData(typed);
+  const A=originalData.tokens, B=typedData.tokens;
+  const changes=Diff.diffArrays(A,B,{comparator:(a,b)=>a.key===b.key});
+  const missing=[],extra=[],spelling=[];
+  let originalIndex=0,typedIndex=0;
 
-const originalData=getWordData(original);
-const typedData=getWordData(typed);
+  changes.forEach(part=>{
+    if(part.removed){
+      part.value.forEach(item=>{
+        missing.push({word:item.word,position:originalIndex+1,lineIndex:item.lineIndex,wordInLine:item.wordInLine,tokenIndex:originalIndex});
+        originalIndex++;
+      });
+    }else if(part.added){
+      part.value.forEach(item=>{
+        extra.push({word:item.word,position:typedIndex+1,lineIndex:item.lineIndex,wordInLine:item.wordInLine,questionNumber:item.questionNumber,optionNumber:item.optionNumber,tokenIndex:typedIndex});
+        typedIndex++;
+      });
+    }else{
+      originalIndex+=part.value.length;
+      typedIndex+=part.value.length;
+    }
+  });
 
-const A=originalData.tokens;
-const B=typedData.tokens;
+  // Pair nearby, highly similar unmatched words as spelling suggestions.
+  // They are not silently corrected and do not inflate Missing/Extra counts.
+  const usedExtra=new Set(), usedMissing=new Set(), spellingPairs=[];
+  missing.forEach((miss,mi)=>{
+    let best=-1,bestScore=Infinity;
+    extra.forEach((ex,ei)=>{
+      if(usedExtra.has(ei)) return;
+      const distance=Math.abs(miss.tokenIndex-ex.tokenIndex);
+      if(distance>12) return;
+      if(!isPossibleSpellingPair(miss.word,ex.word)) return;
+      const score=distance*10+editDistance(getComparisonKey(miss.word),getComparisonKey(ex.word));
+      if(score<bestScore){bestScore=score;best=ei;}
+    });
+    if(best>=0){
+      usedMissing.add(mi);usedExtra.add(best);
+      spellingPairs.push({
+        original:miss.word,typed:extra[best].word,
+        position:miss.position,lineIndex:miss.lineIndex,
+        typedPosition:extra[best].position,
+        questionNumber:extra[best].questionNumber
+      });
+    }
+  });
 
-const changes=Diff.diffArrays(
-A,
-B,
-{
-comparator:(a,b)=>a.key===b.key
-}
-);
-
-const missing=[];
-const extra=[];
-
-let originalIndex=0;
-let typedIndex=0;
-
-changes.forEach(part=>{
-
-if(part.removed){
-
-part.value.forEach(item=>{
-
-missing.push({
-
-word:item.word,
-position:originalIndex+1,
-lineIndex:item.lineIndex,
-wordInLine:item.wordInLine
-
-});
-
-originalIndex++;
-
-});
-
-}else if(part.added){
-
-part.value.forEach(item=>{
-
-extra.push({
-
-word:item.word,
-position:typedIndex+1,
-lineIndex:item.lineIndex,
-wordInLine:item.wordInLine,
-questionNumber:item.questionNumber,
-optionNumber:item.optionNumber
-
-});
-
-typedIndex++;
-
-});
-
-}else{
-
-originalIndex+=part.value.length;
-typedIndex+=part.value.length;
-
-}
-
-});
-
-return {
-
-originalCount:A.length,
-typedCount:B.length,
-missing,
-extra,
-originalLines:originalData.lines
-
-};
+  const finalMissing=missing.filter((_,i)=>!usedMissing.has(i));
+  const finalExtra=extra.filter((_,i)=>!usedExtra.has(i));
+  return {
+    originalCount:A.length,typedCount:B.length,
+    missing:finalMissing,extra:finalExtra,spelling:spellingPairs,
+    originalLines:originalData.lines
+  };
 }
 
 /* =====================================
@@ -1545,7 +1574,7 @@ return groups;
    ORIGINAL MISSING HIGHLIGHT
 ===================================== */
 
-function renderQuestionGroup(group,data,missingPositions){
+function renderQuestionGroup(group,data,missingPositions,spellingPositions){
 
 let html="";
 let globalPosition=1;
@@ -1573,13 +1602,11 @@ if(!getComparisonKey(word)) return escapeHTML(word);
 const position=globalPosition++;
 
 if(missingPositions.has(position)){
-
-return '<span class="missing-mark">'+
-escapeHTML(word)+
-'</span>';
-
+  return '<span class="missing-mark">'+escapeHTML(word)+'</span>';
 }
-
+if(spellingPositions && spellingPositions.has(position)){
+  return '<span class="spelling-mark">'+escapeHTML(word)+'</span>';
+}
 return escapeHTML(word);
 
 });
@@ -1628,6 +1655,10 @@ Missing
 <strong>${data.extra.length}</strong>
 Extra
 </div>
+<div class="stat">
+<strong>${(data.spelling||[]).length}</strong>
+Possible Spelling
+</div>
 
 </div>
 `;
@@ -1636,9 +1667,8 @@ if(data.missing.length){
 
 html+='<h3 class="error">❌ Original থেকে বাদ পড়েছে</h3>';
 
-const missingPositions=new Set(
-data.missing.map(item=>item.position)
-);
+const missingPositions=new Set(data.missing.map(item=>item.position));
+const spellingPositions=new Set((data.spelling||[]).map(item=>item.position));
 
 const groups=buildQuestionGroups(
 data.originalLines||[]
@@ -1673,7 +1703,8 @@ ${escapeHTML(group.label)} — Missing অংশ
 ${renderQuestionGroup(
 group,
 data,
-missingPositions
+missingPositions,
+spellingPositions
 )}
 </div>
 
@@ -1708,6 +1739,13 @@ ${escapeHTML(item.word)}
 
 }
 
+}
+
+if((data.spelling||[]).length){
+  html+='<h3 style="color:#9a6700">🟡 সম্ভাব্য বানান / টাইপিং পার্থক্য</h3>';
+  data.spelling.forEach(item=>{
+    html+=`<div class="result-item"><div class="spelling-info"><b>Original:</b> ${escapeHTML(item.original)}<br><b>Typed:</b> ${escapeHTML(item.typed)}<br><b>পরামর্শ:</b> Original-এর বানানটি যাচাই করুন<br><span class="muted">Original অবস্থান: ${item.position} | Typed অবস্থান: ${item.typedPosition}</span></div></div>`;
+  });
 }
 
 if(data.extra.length){
@@ -1820,15 +1858,15 @@ ${group.positions.join(", ")}
 
 }
 
-if(!data.missing.length&&!data.extra.length){
-
-html+='<h3 class="success">✓ দুটি লেখার শব্দ মিলে গেছে।</h3>';
-
+if(!data.missing.length&&!data.extra.length&&!(data.spelling||[]).length){
+  html+='<h3 class="success">✓ দুটি লেখার শব্দ মিলে গেছে।</h3>';
 }
 
 html+=`
 
 <p class="muted">
+
+লাল = Missing, নীল = Extra, হলুদ = সম্ভাব্য বানান/টাইপিং পার্থক্য।
 
 প্রশ্ন নম্বর ও অপশন Typed Text-এর বিন্যাস অনুযায়ী শনাক্ত করা হয়।
 
