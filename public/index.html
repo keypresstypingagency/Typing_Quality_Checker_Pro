@@ -1540,8 +1540,23 @@ function compareWordsFast(original,typed){
     }
   });
 
+  // A number occupying an entire source line is ambiguous: it may be a page
+  // number, a question label, or genuine numeric content. Keep it visible for
+  // human review, but do not silently classify it as a definite typing omission.
+  const reviewNumbers=[];
+  const definiteMissing=[];
+  missing.forEach(item=>{
+    const sourceLine=(originalData.lines[item.lineIndex]||"").trim();
+    const isolatedNumber=/^[০-৯0-9٠-٩۰-۹]{1,4}[.)।]?$/u.test(sourceLine);
+    if(isolatedNumber){
+      reviewNumbers.push({...item,reviewReason:"একক সংখ্যা / সম্ভাব্য পৃষ্ঠা নম্বর"});
+    }else{
+      definiteMissing.push(item);
+    }
+  });
+
   const usedExtra=new Set(), usedMissing=new Set(), spellingPairs=[];
-  missing.forEach((miss,mi)=>{
+  definiteMissing.forEach((miss,mi)=>{
     let best=-1,bestScore=Infinity;
     extra.forEach((ex,ei)=>{
       if(usedExtra.has(ei) || !contextCompatible(miss,ex)) return;
@@ -1569,7 +1584,8 @@ function compareWordsFast(original,typed){
 
   return {
     originalCount:A.length,typedCount:B.length,
-    missing:missing.filter((_,i)=>!usedMissing.has(i)),
+    missing:definiteMissing.filter((_,i)=>!usedMissing.has(i)),
+    reviewNumbers,
     extra:extra.filter((_,i)=>!usedExtra.has(i)),
     spelling:spellingPairs,punctuation,
     originalLines:originalData.lines
@@ -1700,7 +1716,7 @@ const report=document.getElementById("report");
 
 let html=`
 
-<p class="muted" style="margin:0 0 12px">তুলনা Unicode ও শব্দের অবস্থান মিলিয়ে করা হয়েছে। সম্ভাব্য বানান পার্থক্য কেবল পরামর্শ—সিস্টেম নিজে থেকে কোনো লেখা সংশোধন করে না। OCR-এর ভুল থাকলে Original Text আগে যাচাই করুন।</p>
+<p class="muted" style="margin:0 0 12px">তুলনা Unicode ও শব্দের অবস্থান মিলিয়ে করা হয়েছে। হলুদ চিহ্নিত পার্থক্য টাইপিং ভুল নিশ্চিত করে না—OCR ভুলও হতে পারে। কোনো লেখা স্বয়ংক্রিয়ভাবে সংশোধন করা হয় না; সন্দেহজনক অংশ মূল PDF/ছবির সঙ্গে মিলিয়ে দেখুন।</p>
 
 <div class="stats">
 
@@ -1731,6 +1747,10 @@ Possible Spelling
 <div class="stat">
 <strong>${(data.punctuation||[]).length}</strong>
 Punctuation
+</div>
+<div class="stat">
+<strong>${(data.reviewNumbers||[]).length}</strong>
+Needs Review
 </div>
 
 </div>
@@ -1814,10 +1834,18 @@ ${escapeHTML(item.word)}
 
 }
 
+if((data.reviewNumbers||[]).length){
+  html+='<h3 style="color:#8a5a00">🔎 একক সংখ্যা / সম্ভাব্য পৃষ্ঠা নম্বর — যাচাই প্রয়োজন</h3>';
+  html+='<p class="muted">একটি লাইনে একা থাকা সংখ্যা পৃষ্ঠা নম্বরও হতে পারে, আবার আসল কনটেন্টও হতে পারে। তাই Missing হিসেবে নিশ্চিত না করে আলাদা দেখানো হয়েছে।</p>';
+  data.reviewNumbers.forEach(item=>{
+    html+=`<div class="result-item"><b>সংখ্যা:</b> ${escapeHTML(item.word)} <span class="muted">(Original অবস্থান: ${item.position})</span></div>`;
+  });
+}
+
 if((data.spelling||[]).length){
-  html+='<h3 style="color:#9a6700">🟡 সম্ভাব্য বানান / টাইপিং পার্থক্য</h3>';
+  html+='<h3 style="color:#9a6700">🟡 সম্ভাব্য OCR / বানান / টাইপিং পার্থক্য</h3><p class="muted">এগুলো নিশ্চিত টাইপিং ভুল নয়। Original OCR-এ ভুল থাকলে একই ফল দেখা যেতে পারে।</p>';
   data.spelling.forEach(item=>{
-    html+=`<div class="result-item"><div class="spelling-info"><b>Original:</b> ${escapeHTML(item.original)}<br><b>Typed:</b> ${escapeHTML(item.typed)}<br><b>পরামর্শ:</b> Original-এর বানানটি যাচাই করুন<br><span class="muted">Original অবস্থান: ${item.position} | Typed অবস্থান: ${item.typedPosition}</span></div></div>`;
+    html+=`<div class="result-item"><div class="spelling-info"><b>Original:</b> ${escapeHTML(item.original)}<br><b>Typed:</b> ${escapeHTML(item.typed)}<br><b>পরামর্শ:</b> মূল PDF/ছবি দেখে Original ও Typed—দুটিই যাচাই করুন<br><span class="muted">Original অবস্থান: ${item.position} | Typed অবস্থান: ${item.typedPosition}</span></div></div>`;
   });
 }
 
@@ -1938,7 +1966,7 @@ ${group.positions.join(", ")}
 
 }
 
-if(!data.missing.length&&!data.extra.length&&!(data.spelling||[]).length&&!(data.punctuation||[]).length){
+if(!data.missing.length&&!data.extra.length&&!(data.reviewNumbers||[]).length&&!(data.spelling||[]).length&&!(data.punctuation||[]).length){
   html+='<h3 class="success">✓ দুটি লেখার শব্দ মিলে গেছে।</h3>';
 }
 
@@ -1946,7 +1974,7 @@ html+=`
 
 <p class="muted">
 
-লাল = Missing, নীল = Extra, হলুদ = সম্ভাব্য বানান/টাইপিং পার্থক্য, বেগুনি = যতিচিহ্নের পার্থক্য।
+লাল = নিশ্চিত Missing, নীল = Extra, হলুদ = সম্ভাব্য OCR/বানান/টাইপিং পার্থক্য, বেগুনি = যতিচিহ্নের পার্থক্য। একক সংখ্যা আলাদা Needs Review হিসেবে দেখানো হয়।
 
 প্রশ্ন নম্বর ও অপশন Typed Text-এর বিন্যাস অনুযায়ী শনাক্ত করা হয়।
 
