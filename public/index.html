@@ -27,7 +27,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .muted{color:#667085;font-size:13px;line-height:1.7}
 .file-list{text-align:left;margin-top:15px}
 .file-item{background:white;border:1px solid #e1e7f0;padding:9px;margin:6px 0;border-radius:7px;overflow-wrap:anywhere}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}
+.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0}
 .stat{background:#eef4ff;padding:15px;text-align:center;border-radius:8px}
 .stat strong{display:block;font-size:23px;color:#1765d1}
 .result-item{border:1px solid #e1e7f0;padding:12px;margin:8px 0;border-radius:8px;background:white;overflow-wrap:anywhere}
@@ -35,6 +35,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .success{color:#087b58}
 .question-context{margin-top:10px;padding:12px;background:#f8fafc;border:1px solid #e1e7f0;border-radius:8px;white-space:pre-wrap;line-height:1.9;font-size:14px}
 .missing-mark{color:#c0392b;background:#ffe5e5;border-bottom:2px solid #c0392b;font-weight:bold;padding:1px 2px;border-radius:3px}
+.spelling-mark{color:#8a5a00;background:#fff1bd;border-bottom:2px solid #d99b00;font-weight:bold;padding:1px 2px;border-radius:3px}
+.spelling-info{background:#fffaf0;border:1px solid #f2d58a;padding:10px;border-radius:7px;margin-top:8px;line-height:1.8}
+.extra-line{margin:9px 0;padding:9px 11px;background:#f4f8ff;border-left:3px solid #3977d5;border-radius:4px;line-height:1.8;overflow-wrap:anywhere}
+.extra-line.error{color:#2457a6}
+.symbol-note{background:#f8fafc;border:1px solid #e1e7f0;padding:10px;border-radius:7px;margin-top:10px}
 .question-label{display:block;margin-bottom:8px;color:#172b4d}
 .progress{background:#e8edf5;border-radius:20px;height:9px;overflow:hidden;margin:12px 0}
 .progress div{height:100%;width:0;background:#1765d1;transition:width .2s}
@@ -169,16 +174,20 @@ select{width:100%;padding:10px;border:1px solid #ccd5e2;border-radius:7px;backgr
 </div>
 <label for="aiProviders" style="margin-top:12px">AI Provider নির্বাচন</label>
 <select id="aiProviders">
-  <option value="gemini,ocrspace" selected>Gemini + OCR.space (দুটো একসঙ্গে)</option>
+  <option value="gemini,tesseract,ocrspace" selected>Gemini + Tesseract + OCR.space (সবগুলো)</option>
+  <option value="tesseract">শুধু Tesseract (নিজস্ব ফ্রি সার্ভার)</option>
+  <option value="gemini,tesseract">Gemini + Tesseract</option>
+  <option value="tesseract,ocrspace">Tesseract + OCR.space</option>
+  <option value="gemini,ocrspace">Gemini + OCR.space</option>
+  <option value="chatgpt,gemini,ocrspace">ChatGPT + Gemini + OCR.space</option>
   <option value="chatgpt">শুধু ChatGPT</option>
   <option value="gemini">শুধু Gemini</option>
   <option value="ocrspace">শুধু OCR.space</option>
   <option value="chatgpt,gemini">ChatGPT + Gemini</option>
   <option value="chatgpt,ocrspace">ChatGPT + OCR.space</option>
-  <option value="gemini,ocrspace">Gemini + OCR.space</option>
   <option value="other">শুধু Other AI (কনফিগার করা থাকলে)</option>
 </select>
-<p class="muted">টিক দিলে শুধু নির্বাচিত AI Provider দিয়ে PDF/JPG/PNG পড়া হবে। ChatGPT + Gemini + OCR.space একসঙ্গে চালাতে পারবেন। কোনো AI ব্যর্থ হলে অন্য নির্বাচিত AI-গুলোর ফলাফল পাওয়া গেলে সেগুলো দেখাবে; Traditional OCR-এ fallback হবে না। টিক না থাকলে আগের Tesseract OCR চলবে। API Key Backend-এ রাখতে হবে।</p>
+<p class="muted">নির্বাচিত Provider দিয়ে OCR করা হবে। Tesseract আপনার নিজস্ব সার্ভারে চলবে এবং বাংলা, English, Arabic, Urdu ও Farsi সমর্থন করবে। একাধিক Provider নির্বাচন করলে ফলাফল তুলনা করতে পারবেন। AI OCR বন্ধ থাকলে আগের Traditional OCR চালু থাকবে। API Key Backend-এ রাখতে হবে।</p>
 </div>
 
 </div>
@@ -968,7 +977,9 @@ function showAIProviderReport(){
         <p class="${ai.needsReview ? "error" : "success"}">
           ${ai.needsReview
             ? "⚠️ AI ফলাফলে মতবিরোধ বা Provider error আছে — যাচাই প্রয়োজন"
-            : "✓ নির্বাচিত AI ফলাফলগুলো একই"}
+            : Object.keys(ai.results || {}).length < 2
+              ? "✓ একটি OCR Provider থেকে ফলাফল পাওয়া গেছে — একক ফলাফল, তুলনা করা হয়নি"
+              : "✓ নির্বাচিত OCR Provider-গুলোর ফলাফল একই"}
         </p>
         <details>
           <summary><b>Traditional OCR (Tesseract) ফলাফল দেখুন</b></summary>
@@ -1321,144 +1332,181 @@ return match?match[1]:null;
    TOKEN DATA
 ===================================== */
 
+/*
+  তুলনার জন্য শব্দের দুই পাশের যতিচিহ্ন/ফরম্যাটিং চিহ্ন বাদ দেওয়া হয়,
+  যাতে "লীলাভূমি" এবং "লীলাভূমি।" একই শব্দ হিসেবে মেলে।
+  বাংলা/ইংরেজি অক্ষর, সংখ্যা ও শব্দের ভেতরের চিহ্ন অক্ষত থাকে।
+  কপি করা ডকুমেন্টের Wingdings/Private-Use bullet-ও উপেক্ষা করা হয়।
+*/
+function normalizeComparisonText(value){
+  let text=String(value||"").normalize("NFC")
+    .replace(/[\u200B-\u200D\uFEFF]/g,"")
+    .replace(/[\u0640]/g,"")                 // Arabic tatweel
+    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g,""); // Arabic marks
+
+  // Bengali yeh variants: কোথায় / কোথায়
+  text=text.replace(/য\u09BC/g,"য়");
+
+  // Normalize Bengali, Arabic-Indic and Persian digits to ASCII.
+  text=text.replace(/[০-৯٠-٩۰-۹]/g,ch=>{
+    const cp=ch.codePointAt(0);
+    if(cp>=0x09E6&&cp<=0x09EF) return String(cp-0x09E6);
+    if(cp>=0x0660&&cp<=0x0669) return String(cp-0x0660);
+    if(cp>=0x06F0&&cp<=0x06F9) return String(cp-0x06F0);
+    return ch;
+  });
+
+  // Common Arabic/Persian keyboard variants.
+  text=text.replace(/[يى]/g,"ی").replace(/ك/g,"ک");
+  return text;
+}
+
+function getComparisonKey(value){
+  let key=normalizeComparisonText(value)
+    .replace(/[\uE000-\uF8FF]/g,"")
+    .replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu,"");
+
+  if(!key) return "";
+
+  // Standalone percent / decorative marks are not words; avoid OCR artefacts
+  // such as a stray '%' becoming a false Missing/Extra word.
+  if(/^[%٪•·▪▫■□◆◇★☆]+$/u.test(key)) return "";
+
+  if(/[A-Za-z]/.test(key)) key=key.toLocaleLowerCase("en-US");
+  return key;
+}
+
 function getWordData(text){
+  const normalized=normalizeText(text);
+  const lines=normalized.split("\n");
+  const tokens=[];
+  let currentQuestion=null;
+  let currentOption=null;
 
-const normalized=normalizeText(text);
+  lines.forEach((line,lineIndex)=>{
+    const detectedQuestion=detectQuestionStart(line);
+    if(detectedQuestion){
+      currentQuestion=detectedQuestion;
+      currentOption=null;
+    }
 
-const lines=normalized.split("\n");
-
-const tokens=[];
-
-let currentQuestion=null;
-let currentOption=null;
-
-lines.forEach((line,lineIndex)=>{
-
-const detectedQuestion=detectQuestionStart(line);
-
-if(detectedQuestion){
-currentQuestion=detectedQuestion;
-currentOption=null;
+    const words=line.split(/\s+/u).filter(Boolean);
+    words.forEach((word,wordInLine)=>{
+      const key=getComparisonKey(word);
+      if(!key) return;
+      const detectedOption=detectOptionStart(word);
+      if(detectedOption) currentOption=detectedOption;
+      tokens.push({
+        word,key,lineIndex,wordInLine,
+        position:tokens.length+1,
+        questionNumber:currentQuestion,
+        optionNumber:currentOption
+      });
+    });
+  });
+  return {lines,tokens};
 }
 
-const words=line.split(/\s+/u).filter(Boolean);
-
-words.forEach((word,wordInLine)=>{
-
-const detectedOption=detectOptionStart(word);
-
-if(detectedOption){
-currentOption=detectedOption;
+function editDistance(a,b){
+  const A=Array.from(a), B=Array.from(b);
+  if(Math.abs(A.length-B.length)>3) return 99;
+  let prev=Array.from({length:B.length+1},(_,i)=>i);
+  for(let i=1;i<=A.length;i++){
+    const cur=[i];
+    let rowMin=i;
+    for(let j=1;j<=B.length;j++){
+      const cost=A[i-1]===B[j-1]?0:1;
+      cur[j]=Math.min(cur[j-1]+1,prev[j]+1,prev[j-1]+cost);
+      rowMin=Math.min(rowMin,cur[j]);
+    }
+    if(rowMin>3) return 99;
+    prev=cur;
+  }
+  return prev[B.length];
 }
 
-tokens.push({
+function scriptFamily(value){
+  if(/[\u0980-\u09FF]/u.test(value)) return "bn";
+  if(/[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/u.test(value)) return "ar";
+  if(/[A-Za-z]/u.test(value)) return "latin";
+  return "other";
+}
 
-word,
-key:word.normalize("NFC"),
-lineIndex,
-wordInLine,
-position:tokens.length+1,
-questionNumber:currentQuestion,
-optionNumber:currentOption
-
-});
-
-});
-
-});
-
-return {
-lines,
-tokens
-};
+function isPossibleSpellingPair(originalWord,typedWord){
+  const a=getComparisonKey(originalWord);
+  const b=getComparisonKey(typedWord);
+  if(!a||!b||a===b) return false;
+  const familyA=scriptFamily(a), familyB=scriptFamily(b);
+  if(familyA!==familyB||familyA==="other") return false;
+  const lenA=Array.from(a).length, lenB=Array.from(b).length;
+  const maxLen=Math.max(lenA,lenB), minLen=Math.min(lenA,lenB);
+  if(minLen<4||maxLen>24) return false;
+  const distance=editDistance(a,b);
+  const similarity=1-distance/maxLen;
+  return distance<=2 && similarity>=0.78;
 }
 
 /* =====================================
-   TOKEN DIFF
+   ADVANCED TOKEN DIFF
 ===================================== */
-
 function compareWordsFast(original,typed){
+  if(!window.Diff) throw new Error("Comparison Library লোড হয়নি।");
 
-if(!window.Diff){
-throw new Error("Comparison Library লোড হয়নি।");
-}
+  const originalData=getWordData(original);
+  const typedData=getWordData(typed);
+  const A=originalData.tokens, B=typedData.tokens;
+  const changes=Diff.diffArrays(A,B,{comparator:(a,b)=>a.key===b.key});
+  const missing=[],extra=[],spelling=[];
+  let originalIndex=0,typedIndex=0;
 
-const originalData=getWordData(original);
-const typedData=getWordData(typed);
+  changes.forEach(part=>{
+    if(part.removed){
+      part.value.forEach(item=>{
+        missing.push({word:item.word,position:originalIndex+1,lineIndex:item.lineIndex,wordInLine:item.wordInLine,tokenIndex:originalIndex});
+        originalIndex++;
+      });
+    }else if(part.added){
+      part.value.forEach(item=>{
+        extra.push({word:item.word,position:typedIndex+1,lineIndex:item.lineIndex,wordInLine:item.wordInLine,questionNumber:item.questionNumber,optionNumber:item.optionNumber,tokenIndex:typedIndex});
+        typedIndex++;
+      });
+    }else{
+      originalIndex+=part.value.length;
+      typedIndex+=part.value.length;
+    }
+  });
 
-const A=originalData.tokens;
-const B=typedData.tokens;
+  // Pair nearby, highly similar unmatched words as spelling suggestions.
+  // They are not silently corrected and do not inflate Missing/Extra counts.
+  const usedExtra=new Set(), usedMissing=new Set(), spellingPairs=[];
+  missing.forEach((miss,mi)=>{
+    let best=-1,bestScore=Infinity;
+    extra.forEach((ex,ei)=>{
+      if(usedExtra.has(ei)) return;
+      const distance=Math.abs(miss.tokenIndex-ex.tokenIndex);
+      if(distance>12) return;
+      if(!isPossibleSpellingPair(miss.word,ex.word)) return;
+      const score=distance*10+editDistance(getComparisonKey(miss.word),getComparisonKey(ex.word));
+      if(score<bestScore){bestScore=score;best=ei;}
+    });
+    if(best>=0){
+      usedMissing.add(mi);usedExtra.add(best);
+      spellingPairs.push({
+        original:miss.word,typed:extra[best].word,
+        position:miss.position,lineIndex:miss.lineIndex,
+        typedPosition:extra[best].position,
+        questionNumber:extra[best].questionNumber
+      });
+    }
+  });
 
-const changes=Diff.diffArrays(
-A,
-B,
-{
-comparator:(a,b)=>a.key===b.key
-}
-);
-
-const missing=[];
-const extra=[];
-
-let originalIndex=0;
-let typedIndex=0;
-
-changes.forEach(part=>{
-
-if(part.removed){
-
-part.value.forEach(item=>{
-
-missing.push({
-
-word:item.word,
-position:originalIndex+1,
-lineIndex:item.lineIndex,
-wordInLine:item.wordInLine
-
-});
-
-originalIndex++;
-
-});
-
-}else if(part.added){
-
-part.value.forEach(item=>{
-
-extra.push({
-
-word:item.word,
-position:typedIndex+1,
-lineIndex:item.lineIndex,
-wordInLine:item.wordInLine,
-questionNumber:item.questionNumber,
-optionNumber:item.optionNumber
-
-});
-
-typedIndex++;
-
-});
-
-}else{
-
-originalIndex+=part.value.length;
-typedIndex+=part.value.length;
-
-}
-
-});
-
-return {
-
-originalCount:A.length,
-typedCount:B.length,
-missing,
-extra,
-originalLines:originalData.lines
-
-};
+  const finalMissing=missing.filter((_,i)=>!usedMissing.has(i));
+  const finalExtra=extra.filter((_,i)=>!usedExtra.has(i));
+  return {
+    originalCount:A.length,typedCount:B.length,
+    missing:finalMissing,extra:finalExtra,spelling:spellingPairs,
+    originalLines:originalData.lines
+  };
 }
 
 /* =====================================
@@ -1527,7 +1575,7 @@ return groups;
    ORIGINAL MISSING HIGHLIGHT
 ===================================== */
 
-function renderQuestionGroup(group,data,missingPositions){
+function renderQuestionGroup(group,data,missingPositions,spellingPositions){
 
 let html="";
 let globalPosition=1;
@@ -1549,16 +1597,17 @@ lineIndex<=group.end
 
 const rendered=words.map(word=>{
 
+// Formatting-only tokens are visible but do not shift word positions.
+if(!getComparisonKey(word)) return escapeHTML(word);
+
 const position=globalPosition++;
 
 if(missingPositions.has(position)){
-
-return '<span class="missing-mark">'+
-escapeHTML(word)+
-'</span>';
-
+  return '<span class="missing-mark">'+escapeHTML(word)+'</span>';
 }
-
+if(spellingPositions && spellingPositions.has(position)){
+  return '<span class="spelling-mark">'+escapeHTML(word)+'</span>';
+}
 return escapeHTML(word);
 
 });
@@ -1607,17 +1656,20 @@ Missing
 <strong>${data.extra.length}</strong>
 Extra
 </div>
+<div class="stat">
+<strong>${(data.spelling||[]).length}</strong>
+Possible Spelling
+</div>
 
 </div>
 `;
 
-if(data.missing.length){
+if(data.missing.length || (data.spelling||[]).length){
 
-html+='<h3 class="error">❌ Original থেকে বাদ পড়েছে</h3>';
+if(data.missing.length) html+='<h3 class="error">❌ Original থেকে বাদ পড়েছে</h3>';
 
-const missingPositions=new Set(
-data.missing.map(item=>item.position)
-);
+const missingPositions=new Set(data.missing.map(item=>item.position));
+const spellingPositions=new Set((data.spelling||[]).map(item=>item.position));
 
 const groups=buildQuestionGroups(
 data.originalLines||[]
@@ -1631,35 +1683,36 @@ const groupMissing=data.missing.filter(item=>
 item.lineIndex>=group.start&&
 item.lineIndex<=group.end
 );
+const groupSpelling=(data.spelling||[]).filter(item=>
+item.lineIndex>=group.start&&item.lineIndex<=group.end
+);
 
-if(!groupMissing.length)return;
+if(!groupMissing.length&&!groupSpelling.length)return;
 
 shownAnyGroup=true;
 
-const missingText=groupMissing
-.map(item=>item.word)
-.join(" ");
+const missingText=groupMissing.map(item=>item.word).join(" ");
+const spellingText=groupSpelling.map(item=>`${item.original} → ${item.typed}`).join(" | ");
 
 html+=`
 
 <div class="result-item">
 
 <b class="question-label">
-${escapeHTML(group.label)} — Missing অংশ
+${escapeHTML(group.label)} — ${groupMissing.length?"Missing / বানান পার্থক্য":"সম্ভাব্য বানান পার্থক্য"}
 </b>
 
 <div class="question-context">
 ${renderQuestionGroup(
 group,
 data,
-missingPositions
+missingPositions,
+spellingPositions
 )}
 </div>
 
-<p class="error">
-<b>শুধু বাদ পড়েছে:</b>
-${escapeHTML(missingText)}
-</p>
+${groupMissing.length?`<p class="error"><b>শুধু বাদ পড়েছে:</b> ${escapeHTML(missingText)}</p>`:""}
+${groupSpelling.length?`<p style="color:#9a6700"><b>সম্ভাব্য বানান:</b> ${escapeHTML(spellingText)}</p>`:""}
 
 </div>
 `;
@@ -1687,6 +1740,13 @@ ${escapeHTML(item.word)}
 
 }
 
+}
+
+if((data.spelling||[]).length){
+  html+='<h3 style="color:#9a6700">🟡 সম্ভাব্য বানান / টাইপিং পার্থক্য</h3>';
+  data.spelling.forEach(item=>{
+    html+=`<div class="result-item"><div class="spelling-info"><b>Original:</b> ${escapeHTML(item.original)}<br><b>Typed:</b> ${escapeHTML(item.typed)}<br><b>পরামর্শ:</b> Original-এর বানানটি যাচাই করুন<br><span class="muted">Original অবস্থান: ${item.position} | Typed অবস্থান: ${item.typedPosition}</span></div></div>`;
+  });
 }
 
 if(data.extra.length){
@@ -1799,15 +1859,15 @@ ${group.positions.join(", ")}
 
 }
 
-if(!data.missing.length&&!data.extra.length){
-
-html+='<h3 class="success">✓ দুটি লেখার শব্দ মিলে গেছে।</h3>';
-
+if(!data.missing.length&&!data.extra.length&&!(data.spelling||[]).length){
+  html+='<h3 class="success">✓ দুটি লেখার শব্দ মিলে গেছে।</h3>';
 }
 
 html+=`
 
 <p class="muted">
+
+লাল = Missing, নীল = Extra, হলুদ = সম্ভাব্য বানান/টাইপিং পার্থক্য।
 
 প্রশ্ন নম্বর ও অপশন Typed Text-এর বিন্যাস অনুযায়ী শনাক্ত করা হয়।
 
