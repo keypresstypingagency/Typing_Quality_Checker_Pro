@@ -1,4 +1,3 @@
-
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -6,17 +5,20 @@ import helmet from "helmet";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 
+const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 const port = Number(process.env.PORT || 3000);
 const maxMb = Number(process.env.MAX_UPLOAD_MB || 12);
-
-// ==========================================
-// BASIC SECURITY
-// ==========================================
+const tesseractLanguages = process.env.TESSERACT_LANGUAGES || "ben+eng";
+const tesseractTimeoutMs = Number(process.env.TESSERACT_TIMEOUT_MS || 90000);
 
 app.disable("x-powered-by");
 
@@ -26,36 +28,22 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: [
-        "'self'",
-        "'unsafe-inline'",
-        "'wasm-unsafe-eval'",
-        "https://cdn.jsdelivr.net",
-        "https://cdnjs.cloudflare.com"
+        "'self'", "'unsafe-inline'", "'wasm-unsafe-eval'",
+        "https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com"
       ],
-      styleSrc: [
-        "'self'",
-        "'unsafe-inline'",
-        "https://cdnjs.cloudflare.com"
-      ],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
       imgSrc: ["'self'", "data:", "blob:"],
       connectSrc: [
-        "'self'",
-        "https://api.openai.com",
+        "'self'", "https://api.openai.com",
         "https://generativelanguage.googleapis.com",
-        "https://api.ocr.space",
-        "https://cdn.jsdelivr.net",
-        "https://cdnjs.cloudflare.com",
-        "https://tessdata.projectnaptha.com"
+        "https://api.ocr.space", "https://cdn.jsdelivr.net",
+        "https://cdnjs.cloudflare.com", "https://tessdata.projectnaptha.com"
       ],
       workerSrc: ["'self'", "blob:"],
       fontSrc: ["'self'", "data:"]
     }
   }
 }));
-
-// ==========================================
-// CORS CONFIGURATION
-// ==========================================
 
 const allowedOrigins = (process.env.ALLOWED_ORIGIN || "")
   .split(",")
@@ -70,12 +58,9 @@ const allowedOrigins = (process.env.ALLOWED_ORIGIN || "")
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin) {
-      return callback(null, true);
-    }
+    if (!origin) return callback(null, true);
 
     let normalizedOrigin;
-
     try {
       normalizedOrigin = new URL(origin).origin;
     } catch {
@@ -94,19 +79,11 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-// ==========================================
-// STATIC WEBSITE
-// ==========================================
-
 const publicDir = path.join(__dirname, "public");
 
 app.use(express.static(publicDir, {
   extensions: ["html"]
 }));
-
-// ==========================================
-// FILE UPLOAD
-// ==========================================
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -115,10 +92,6 @@ const upload = multer({
     files: 1
   }
 });
-
-// ==========================================
-// AI RATE LIMIT
-// ==========================================
 
 const aiLimiter = rateLimit({
   windowMs: 60_000,
@@ -129,10 +102,6 @@ const aiLimiter = rateLimit({
     error: "অনেক বেশি AI OCR অনুরোধ হয়েছে। এক মিনিট পর আবার চেষ্টা করুন।"
   }
 });
-
-// ==========================================
-// OCR PROMPT
-// ==========================================
 
 const OCR_PROMPT = `You are a high-accuracy document transcription engine.
 
@@ -148,10 +117,6 @@ Important:
 - Use [অস্পষ্ট] only for a genuinely unreadable short region.
 - Return only the transcription.
 - No markdown fences, commentary or preface.`;
-
-// ==========================================
-// COMMON HELPERS
-// ==========================================
 
 function dataUrl(file) {
   return `data:${file.mimetype};base64,${file.buffer.toString("base64")}`;
@@ -208,10 +173,6 @@ function getRetryDelay(response, attempt) {
   return [1000, 2000, 4000][attempt] || 4000;
 }
 
-// ==========================================
-// GEMINI AUTOMATIC RETRY HELPER
-// ==========================================
-
 async function fetchWithRetry(url, options, provider, maxRetries = 3) {
   let lastError;
 
@@ -231,19 +192,14 @@ async function fetchWithRetry(url, options, provider, maxRetries = 3) {
         throw new Error(`${provider}: ${error.message}`);
       }
 
-      const delay = [1000, 2000, 4000][attempt];
-
-      console.warn(
-        `${provider}: Network error. Retry ${attempt + 1}/${maxRetries} in ${delay}ms`
-      );
+      const delay = [1000, 2000, 4000][attempt] || 4000;
+      console.warn(`${provider}: Network error. Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
 
       await sleep(delay);
       continue;
     }
 
-    if (response.ok) {
-      return response;
-    }
+    if (response.ok) return response;
 
     const body = await response.json().catch(() => ({}));
 
@@ -254,28 +210,168 @@ async function fetchWithRetry(url, options, provider, maxRetries = 3) {
 
     lastError = new Error(message);
 
-    if (
-      !isRetryableStatus(response.status) ||
-      attempt === maxRetries
-    ) {
+    if (!isRetryableStatus(response.status) || attempt === maxRetries) {
       throw lastError;
     }
 
     const delay = getRetryDelay(response, attempt);
-
-    console.warn(
-      `${provider}: HTTP ${response.status}. Retry ${attempt + 1}/${maxRetries} in ${delay}ms`
-    );
+    console.warn(`${provider}: HTTP ${response.status}. Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
 
     await sleep(delay);
   }
 
   throw lastError || new Error(`${provider} request failed`);
 }
+async function getTesseractStatus() {
+  try {
+    const { stdout } = await execFileAsync(
+      process.env.TESSERACT_PATH || "tesseract",
+      ["--list-langs"],
+      { timeout: 10000, maxBuffer: 1024 * 1024 }
+    );
 
-// ==========================================
-// OCR.SPACE PROVIDER
-// ==========================================
+    const installedLanguages = stdout
+      .split(/\r?\n/)
+      .slice(1)
+      .map(value => value.trim())
+      .filter(Boolean);
+
+    const requestedLanguages = tesseractLanguages.split("+").filter(Boolean);
+    const missingLanguages = requestedLanguages.filter(
+      language => !installedLanguages.includes(language)
+    );
+
+    return {
+      installed: true,
+      languages: installedLanguages,
+      configuredLanguages: tesseractLanguages,
+      missingLanguages
+    };
+  } catch (error) {
+    return {
+      installed: false,
+      languages: [],
+      configuredLanguages: tesseractLanguages,
+      missingLanguages: tesseractLanguages.split("+").filter(Boolean),
+      error: error.message
+    };
+  }
+}
+
+async function callTesseract(file) {
+  const extensions = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp"
+  };
+
+  const extension = extensions[file.mimetype];
+
+  if (!extension) {
+    throw new Error("Tesseract: শুধু PNG, JPG অথবা WEBP ছবি সমর্থিত");
+  }
+
+  let tempDir;
+
+  try {
+    tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "typing-quality-ocr-")
+    );
+
+    const inputPath = path.join(tempDir, `input${extension}`);
+    await writeFile(inputPath, file.buffer);
+
+    const text = await new Promise((resolve, reject) => {
+      const child = spawn(
+        process.env.TESSERACT_PATH || "tesseract",
+        [
+          inputPath,
+          "stdout",
+          "-l",
+          tesseractLanguages,
+          "--psm",
+          String(process.env.TESSERACT_PSM || "3")
+        ],
+        {
+          shell: false,
+          windowsHide: true
+        }
+      );
+
+      let output = "";
+      let errorOutput = "";
+      let settled = false;
+
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(new Error("Tesseract OCR সময়সীমা অতিক্রম করেছে"));
+      }, tesseractTimeoutMs);
+
+      function finish(error, result) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+
+        if (error) reject(error);
+        else resolve(result);
+      }
+
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+
+      child.stdout.on("data", chunk => {
+        output += chunk;
+
+        if (output.length > 2_000_000) {
+          child.kill("SIGKILL");
+          finish(new Error("Tesseract OCR output নির্ধারিত সীমা অতিক্রম করেছে"));
+        }
+      });
+
+      child.stderr.on("data", chunk => {
+        if (errorOutput.length < 12000) {
+          errorOutput += chunk;
+        }
+      });
+
+      child.on("error", error => {
+        finish(new Error(
+          `Tesseract চালু করা যায়নি। Dockerfile-এ Tesseract ইনস্টল আছে কি না পরীক্ষা করুন। ${error.message}`
+        ));
+      });
+
+      child.on("close", code => {
+        if (settled) return;
+
+        if (code !== 0) {
+          return finish(new Error(
+            `Tesseract ব্যর্থ হয়েছে: ${errorOutput.trim() || `Exit code ${code}`}`
+          ));
+        }
+
+        const result = output.trim();
+
+        if (!result) {
+          return finish(new Error("Tesseract কোনো লেখা শনাক্ত করতে পারেনি"));
+        }
+
+        finish(null, result);
+      });
+    });
+
+    return text;
+
+  } finally {
+    if (tempDir) {
+      await rm(tempDir, {
+        recursive: true,
+        force: true
+      }).catch(error => {
+        console.warn("Temporary OCR file cleanup warning:", error.message);
+      });
+    }
+  }
+}
 
 async function callOCRSpace(file) {
   if (!process.env.OCR_SPACE_API_KEY) {
@@ -330,11 +426,6 @@ async function callOCRSpace(file) {
 
   return text;
 }
-
-// ==========================================
-// OPENAI PROVIDER
-// ==========================================
-
 async function callOpenAI(file) {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY সেট করা হয়নি");
@@ -357,10 +448,7 @@ async function callOpenAI(file) {
         input: [{
           role: "user",
           content: [
-            {
-              type: "input_text",
-              text: OCR_PROMPT
-            },
+            { type: "input_text", text: OCR_PROMPT },
             {
               type: "input_image",
               image_url: dataUrl(file),
@@ -391,10 +479,6 @@ async function callOpenAI(file) {
   return text;
 }
 
-// ==========================================
-// GEMINI PROVIDER WITH AUTOMATIC RETRY
-// ==========================================
-
 async function callGemini(file) {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY সেট করা হয়নি");
@@ -417,9 +501,7 @@ async function callGemini(file) {
         contents: [{
           role: "user",
           parts: [
-            {
-              text: OCR_PROMPT
-            },
+            { text: OCR_PROMPT },
             {
               inline_data: {
                 mime_type: file.mimetype,
@@ -440,7 +522,6 @@ async function callGemini(file) {
   );
 
   const json = await readJson(response, "Gemini");
-
   const candidate = json.candidates?.[0];
 
   const text = (candidate?.content?.parts || [])
@@ -460,10 +541,6 @@ async function callGemini(file) {
 
   return text;
 }
-
-// ==========================================
-// OTHER AI PROVIDER
-// ==========================================
 
 async function callOther(file) {
   const base = process.env.OTHER_AI_BASE_URL;
@@ -486,15 +563,10 @@ async function callOther(file) {
         messages: [{
           role: "user",
           content: [
-            {
-              type: "text",
-              text: OCR_PROMPT
-            },
+            { type: "text", text: OCR_PROMPT },
             {
               type: "image_url",
-              image_url: {
-                url: dataUrl(file)
-              }
+              image_url: { url: dataUrl(file) }
             }
           ]
         }]
@@ -505,7 +577,6 @@ async function callOther(file) {
   );
 
   const json = await readJson(response, "Other AI");
-
   const text = json.choices?.[0]?.message?.content;
 
   if (typeof text !== "string" || !text.trim()) {
@@ -515,11 +586,10 @@ async function callOther(file) {
   return text.trim();
 }
 
-// ==========================================
 // HEALTH CHECK
-// ==========================================
+app.get("/api/health", async (_req, res) => {
+  const tesseract = await getTesseractStatus();
 
-app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     providers: {
@@ -529,16 +599,15 @@ app.get("/api/health", (_req, res) => {
       other: Boolean(
         process.env.OTHER_AI_BASE_URL &&
         process.env.OTHER_AI_API_KEY
-      )
+      ),
+      tesseract: tesseract.installed
     },
+    tesseract,
     geminiModel: process.env.GEMINI_MODEL || "gemini-2.5-flash"
   });
 });
 
-// ==========================================
 // AI OCR MAIN ROUTE
-// ==========================================
-
 app.post(
   "/api/ai-ocr",
   aiLimiter,
@@ -576,7 +645,8 @@ app.post(
         "ocrspace",
         "chatgpt",
         "gemini",
-        "other"
+        "other",
+        "tesseract"
       ]);
 
       const unknown = requested.filter(
@@ -593,7 +663,7 @@ app.post(
       if (!requested.length) {
         return res.status(400).json({
           ok: false,
-          error: "কমপক্ষে একটি AI Provider নির্বাচন করুন"
+          error: "কমপক্ষে একটি OCR Provider নির্বাচন করুন"
         });
       }
 
@@ -601,7 +671,8 @@ app.post(
         chatgpt: () => callOpenAI(req.file),
         gemini: () => callGemini(req.file),
         ocrspace: () => callOCRSpace(req.file),
-        other: () => callOther(req.file)
+        other: () => callOther(req.file),
+        tesseract: () => callTesseract(req.file)
       };
 
       const settled = await Promise.allSettled(
@@ -625,10 +696,10 @@ app.post(
         }
       });
 
-      // Provider priority
       const priority = [
         "chatgpt",
         "gemini",
+        "tesseract",
         "other",
         "ocrspace"
       ];
@@ -640,13 +711,12 @@ app.post(
       if (!primaryName) {
         return res.status(502).json({
           ok: false,
-          error: "নির্বাচিত কোনো AI Provider সফল হয়নি। API Key ও Backend log পরীক্ষা করুন।",
+          error: "নির্বাচিত কোনো OCR Provider সফল হয়নি। API Key, Tesseract installation এবং Backend log পরীক্ষা করুন।",
           providerErrors: errors
         });
       }
 
       const primaryText = results[primaryName];
-
       const available = Object.entries(results);
 
       const identical = available.every(
@@ -677,18 +747,12 @@ app.post(
   }
 );
 
-// ==========================================
 // FRONTEND ROUTE
-// ==========================================
-
 app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(publicDir, "index.html"));
 });
 
-// ==========================================
 // GLOBAL ERROR HANDLER
-// ==========================================
-
 app.use((error, _req, res, _next) => {
   console.error("Server Error:", error);
 
@@ -703,7 +767,10 @@ app.use((error, _req, res, _next) => {
     });
   }
 
-  if (error.message?.includes("website origin")) {
+  if (
+    error.message?.includes("website origin") ||
+    error.message?.includes("Invalid website origin")
+  ) {
     return res.status(403).json({
       ok: false,
       error: error.message
@@ -716,20 +783,27 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-// ==========================================
 // START SERVER
-// ==========================================
-
-app.listen(port, () => {
-  console.log(
-    `Typing Quality Checker running on port ${port}`
-  );
-
-  console.log(
-    `Gemini Model: ${process.env.GEMINI_MODEL || "gemini-2.5-flash"}`
-  );
-
-  console.log(
-    `Allowed Origins: ${allowedOrigins.length}`
-  );
+const server = app.listen(port, () => {
+  console.log(`Typing Quality Checker running on port ${port}`);
+  console.log(`Gemini Model: ${process.env.GEMINI_MODEL || "gemini-2.5-flash"}`);
+  console.log(`Tesseract Languages: ${tesseractLanguages}`);
+  console.log(`Allowed Origins: ${allowedOrigins.length}`);
 });
+
+async function shutdown(signal) {
+  console.log(`${signal} received. Closing server...`);
+
+  server.close(() => {
+    console.log("HTTP server closed.");
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error("Forced shutdown after timeout.");
+    process.exit(1);
+  }, 10000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
