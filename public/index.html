@@ -27,7 +27,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .muted{color:#667085;font-size:13px;line-height:1.7}
 .file-list{text-align:left;margin-top:15px}
 .file-item{background:white;border:1px solid #e1e7f0;padding:9px;margin:6px 0;border-radius:7px;overflow-wrap:anywhere}
-.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:18px 0}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}
 .stat{background:#eef4ff;padding:15px;text-align:center;border-radius:8px}
 .stat strong{display:block;font-size:23px;color:#1765d1}
 .result-item{border:1px solid #e1e7f0;padding:12px;margin:8px 0;border-radius:8px;background:white;overflow-wrap:anywhere}
@@ -38,7 +38,6 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .spelling-mark{color:#8a5a00;background:#fff1bd;border-bottom:2px solid #d99b00;font-weight:bold;padding:1px 2px;border-radius:3px}
 .spelling-info{background:#fffaf0;border:1px solid #f2d58a;padding:10px;border-radius:7px;margin-top:8px;line-height:1.8}
 .extra-line{margin:9px 0;padding:9px 11px;background:#f4f8ff;border-left:3px solid #3977d5;border-radius:4px;line-height:1.8;overflow-wrap:anywhere}
-.extra-line.error{color:#2457a6}
 .symbol-note{background:#f8fafc;border:1px solid #e1e7f0;padding:10px;border-radius:7px;margin-top:10px}
 .question-label{display:block;margin-bottom:8px;color:#172b4d}
 .progress{background:#e8edf5;border-radius:20px;height:9px;overflow:hidden;margin:12px 0}
@@ -1664,9 +1663,9 @@ Possible Spelling
 </div>
 `;
 
-if(data.missing.length || (data.spelling||[]).length){
+if(data.missing.length){
 
-if(data.missing.length) html+='<h3 class="error">❌ Original থেকে বাদ পড়েছে</h3>';
+html+='<h3 class="error">❌ Original থেকে বাদ পড়েছে</h3>';
 
 const missingPositions=new Set(data.missing.map(item=>item.position));
 const spellingPositions=new Set((data.spelling||[]).map(item=>item.position));
@@ -1683,23 +1682,21 @@ const groupMissing=data.missing.filter(item=>
 item.lineIndex>=group.start&&
 item.lineIndex<=group.end
 );
-const groupSpelling=(data.spelling||[]).filter(item=>
-item.lineIndex>=group.start&&item.lineIndex<=group.end
-);
 
-if(!groupMissing.length&&!groupSpelling.length)return;
+if(!groupMissing.length)return;
 
 shownAnyGroup=true;
 
-const missingText=groupMissing.map(item=>item.word).join(" ");
-const spellingText=groupSpelling.map(item=>`${item.original} → ${item.typed}`).join(" | ");
+const missingText=groupMissing
+.map(item=>item.word)
+.join(" ");
 
 html+=`
 
 <div class="result-item">
 
 <b class="question-label">
-${escapeHTML(group.label)} — ${groupMissing.length?"Missing / বানান পার্থক্য":"সম্ভাব্য বানান পার্থক্য"}
+${escapeHTML(group.label)} — Missing অংশ
 </b>
 
 <div class="question-context">
@@ -1711,8 +1708,10 @@ spellingPositions
 )}
 </div>
 
-${groupMissing.length?`<p class="error"><b>শুধু বাদ পড়েছে:</b> ${escapeHTML(missingText)}</p>`:""}
-${groupSpelling.length?`<p style="color:#9a6700"><b>সম্ভাব্য বানান:</b> ${escapeHTML(spellingText)}</p>`:""}
+<p class="error">
+<b>শুধু বাদ পড়েছে:</b>
+${escapeHTML(missingText)}
+</p>
 
 </div>
 `;
