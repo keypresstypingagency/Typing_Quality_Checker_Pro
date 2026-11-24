@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Typing Quality Checker</title>
+<title>Typing Quality Checker — Pro Max</title>
 
 <style>
 *{box-sizing:border-box}
@@ -1408,8 +1408,24 @@ function getWordData(text){
   return {lines,tokens};
 }
 
+/*
+  বাংলা/আরবি/উর্দু/ফারসি শব্দে একটি দৃশ্যমান অক্ষর একাধিক Unicode
+  code point দিয়ে তৈরি হতে পারে। তাই বানান তুলনায় grapheme cluster ব্যবহার করি;
+  fallback হিসেবে code point রাখা হয়েছে।
+*/
+function splitGraphemes(value){
+  const text=String(value||'').normalize('NFC');
+  try{
+    if(typeof Intl!=='undefined' && Intl.Segmenter){
+      const segmenter=new Intl.Segmenter('bn',{granularity:'grapheme'});
+      return Array.from(segmenter.segment(text),part=>part.segment);
+    }
+  }catch(error){}
+  return Array.from(text);
+}
+
 function editDistance(a,b){
-  const A=Array.from(a), B=Array.from(b);
+  const A=splitGraphemes(a), B=splitGraphemes(b);
   if(Math.abs(A.length-B.length)>3) return 99;
   let prev=Array.from({length:B.length+1},(_,i)=>i);
   for(let i=1;i<=A.length;i++){
@@ -1445,11 +1461,17 @@ function isPossibleSpellingPair(originalWord,typedWord){
   if(!a||!b||a===b) return false;
   const familyA=scriptFamily(a), familyB=scriptFamily(b);
   if(familyA!==familyB||familyA==="other") return false;
-  const lenA=Array.from(a).length, lenB=Array.from(b).length;
+  if(/^\d+$/u.test(a)||/^\d+$/u.test(b)) return false;
+  const lenA=splitGraphemes(a).length, lenB=splitGraphemes(b).length;
   const maxLen=Math.max(lenA,lenB), minLen=Math.min(lenA,lenB);
-  if(minLen<4||maxLen>32) return false;
+  if(minLen<(familyA==="bn"?2:4)||maxLen>32) return false;
   const distance=editDistance(a,b);
-  return distance<=spellingDistanceLimit(maxLen) && (1-distance/maxLen)>=0.78;
+  const similarity=1-distance/maxLen;
+  // বাংলা OCR-এ কার/ফলা/যুক্তাক্ষরের দৃশ্যমান পার্থক্যে code point নয়,
+  // grapheme ভিত্তিক similarity কিছুটা সহনশীল রাখা হয়েছে। এটি কেবল suggestion;
+  // কখনোই Typed Text নিজে থেকে পরিবর্তন করা হয় না।
+  const threshold=familyA==="bn"?(maxLen<=2?0.45:0.66):0.76;
+  return distance<=spellingDistanceLimit(maxLen) && similarity>=threshold;
 }
 
 function contextCompatible(miss,extra){
@@ -1677,6 +1699,8 @@ function showReport(data){
 const report=document.getElementById("report");
 
 let html=`
+
+<p class="muted" style="margin:0 0 12px">তুলনা Unicode ও শব্দের অবস্থান মিলিয়ে করা হয়েছে। সম্ভাব্য বানান পার্থক্য কেবল পরামর্শ—সিস্টেম নিজে থেকে কোনো লেখা সংশোধন করে না। OCR-এর ভুল থাকলে Original Text আগে যাচাই করুন।</p>
 
 <div class="stats">
 
