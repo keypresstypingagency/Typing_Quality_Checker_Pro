@@ -27,7 +27,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .muted{color:#667085;font-size:13px;line-height:1.7}
 .file-list{text-align:left;margin-top:15px}
 .file-item{background:white;border:1px solid #e1e7f0;padding:9px;margin:6px 0;border-radius:7px;overflow-wrap:anywhere}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px;margin:18px 0}
 .stat{background:#eef4ff;padding:15px;text-align:center;border-radius:8px}
 .stat strong{display:block;font-size:23px;color:#1765d1}
 .result-item{border:1px solid #e1e7f0;padding:12px;margin:8px 0;border-radius:8px;background:white;overflow-wrap:anywhere}
@@ -71,7 +71,7 @@ select{width:100%;padding:10px;border:1px solid #ccd5e2;border-radius:7px;backgr
 
 <main>
 <h1>Document Quality Checker</h1>
-<p class="muted">ফাইল আপলোড করুন অথবা Original Text লিখুন। পাশে Typed Text দিয়ে তুলনা করুন।</p>
+<p class="muted">ফাইল আপলোড করুন অথবা Original Text লিখুন। Typed Text-এর সঙ্গে শব্দ, বানান ও যতিচিহ্ন তুলনা করুন।</p>
 
 <section class="panel">
 
@@ -1355,8 +1355,10 @@ function normalizeComparisonText(value){
     return ch;
   });
 
-  // Common Arabic/Persian keyboard variants.
-  text=text.replace(/[يى]/g,"ی").replace(/ك/g,"ک");
+  // Common Arabic/Persian keyboard variants and equivalent alef forms.
+  text=text.replace(/[يىئ]/g,"ی").replace(/ك/g,"ک");
+  text=text.replace(/[أإآٱ]/g,"ا");
+  // Keep meaningful Bengali consonants distinct while normalizing common forms.
   return text;
 }
 
@@ -1431,6 +1433,12 @@ function scriptFamily(value){
   return "other";
 }
 
+function spellingDistanceLimit(length){
+  if(length<=5) return 1;
+  if(length<=11) return 2;
+  return 3;
+}
+
 function isPossibleSpellingPair(originalWord,typedWord){
   const a=getComparisonKey(originalWord);
   const b=getComparisonKey(typedWord);
@@ -1439,10 +1447,24 @@ function isPossibleSpellingPair(originalWord,typedWord){
   if(familyA!==familyB||familyA==="other") return false;
   const lenA=Array.from(a).length, lenB=Array.from(b).length;
   const maxLen=Math.max(lenA,lenB), minLen=Math.min(lenA,lenB);
-  if(minLen<4||maxLen>24) return false;
+  if(minLen<4||maxLen>32) return false;
   const distance=editDistance(a,b);
-  const similarity=1-distance/maxLen;
-  return distance<=2 && similarity>=0.78;
+  return distance<=spellingDistanceLimit(maxLen) && (1-distance/maxLen)>=0.78;
+}
+
+function contextCompatible(miss,extra){
+  if(miss.questionNumber && extra.questionNumber &&
+     String(miss.questionNumber)!==String(extra.questionNumber)) return false;
+  if(miss.optionNumber && extra.optionNumber &&
+     String(miss.optionNumber)!==String(extra.optionNumber)) return false;
+  return true;
+}
+
+function punctuationSignature(word){
+  const s=String(word||"");
+  const leading=(s.match(/^[\p{P}\p{S}]+/u)||[""])[0];
+  const trailing=(s.match(/[\p{P}\p{S}]+$/u)||[""])[0];
+  return leading+"|"+trailing;
 }
 
 /* =====================================
@@ -1455,37 +1477,60 @@ function compareWordsFast(original,typed){
   const typedData=getWordData(typed);
   const A=originalData.tokens, B=typedData.tokens;
   const changes=Diff.diffArrays(A,B,{comparator:(a,b)=>a.key===b.key});
-  const missing=[],extra=[],spelling=[];
+  const missing=[],extra=[],spelling=[],punctuation=[];
   let originalIndex=0,typedIndex=0;
 
   changes.forEach(part=>{
     if(part.removed){
       part.value.forEach(item=>{
-        missing.push({word:item.word,position:originalIndex+1,lineIndex:item.lineIndex,wordInLine:item.wordInLine,tokenIndex:originalIndex});
+        missing.push({
+          word:item.word,position:originalIndex+1,lineIndex:item.lineIndex,
+          wordInLine:item.wordInLine,tokenIndex:originalIndex,
+          questionNumber:item.questionNumber,optionNumber:item.optionNumber
+        });
         originalIndex++;
       });
     }else if(part.added){
       part.value.forEach(item=>{
-        extra.push({word:item.word,position:typedIndex+1,lineIndex:item.lineIndex,wordInLine:item.wordInLine,questionNumber:item.questionNumber,optionNumber:item.optionNumber,tokenIndex:typedIndex});
+        extra.push({
+          word:item.word,position:typedIndex+1,lineIndex:item.lineIndex,
+          wordInLine:item.wordInLine,questionNumber:item.questionNumber,
+          optionNumber:item.optionNumber,tokenIndex:typedIndex
+        });
         typedIndex++;
       });
     }else{
+      part.value.forEach((item,index)=>{
+        const originalItem=A[originalIndex+index];
+        const typedItem=B[typedIndex+index];
+        if(originalItem && typedItem &&
+           punctuationSignature(originalItem.word)!==punctuationSignature(typedItem.word)){
+          punctuation.push({
+            original:originalItem.word,typed:typedItem.word,
+            position:originalIndex+index+1,
+            typedPosition:typedIndex+index+1,
+            lineIndex:originalItem.lineIndex
+          });
+        }
+      });
       originalIndex+=part.value.length;
       typedIndex+=part.value.length;
     }
   });
 
-  // Pair nearby, highly similar unmatched words as spelling suggestions.
-  // They are not silently corrected and do not inflate Missing/Extra counts.
   const usedExtra=new Set(), usedMissing=new Set(), spellingPairs=[];
   missing.forEach((miss,mi)=>{
     let best=-1,bestScore=Infinity;
     extra.forEach((ex,ei)=>{
-      if(usedExtra.has(ei)) return;
+      if(usedExtra.has(ei) || !contextCompatible(miss,ex)) return;
       const distance=Math.abs(miss.tokenIndex-ex.tokenIndex);
-      if(distance>12) return;
-      if(!isPossibleSpellingPair(miss.word,ex.word)) return;
-      const score=distance*10+editDistance(getComparisonKey(miss.word),getComparisonKey(ex.word));
+      if(distance>8 || !isPossibleSpellingPair(miss.word,ex.word)) return;
+      const edit=editDistance(getComparisonKey(miss.word),getComparisonKey(ex.word));
+      const sameQuestion=miss.questionNumber && ex.questionNumber &&
+        String(miss.questionNumber)===String(ex.questionNumber);
+      const sameOption=miss.optionNumber && ex.optionNumber &&
+        String(miss.optionNumber)===String(ex.optionNumber);
+      const score=distance*8+edit-(sameQuestion?3:0)-(sameOption?2:0);
       if(score<bestScore){bestScore=score;best=ei;}
     });
     if(best>=0){
@@ -1494,16 +1539,17 @@ function compareWordsFast(original,typed){
         original:miss.word,typed:extra[best].word,
         position:miss.position,lineIndex:miss.lineIndex,
         typedPosition:extra[best].position,
-        questionNumber:extra[best].questionNumber
+        questionNumber:miss.questionNumber,
+        optionNumber:miss.optionNumber
       });
     }
   });
 
-  const finalMissing=missing.filter((_,i)=>!usedMissing.has(i));
-  const finalExtra=extra.filter((_,i)=>!usedExtra.has(i));
   return {
     originalCount:A.length,typedCount:B.length,
-    missing:finalMissing,extra:finalExtra,spelling:spellingPairs,
+    missing:missing.filter((_,i)=>!usedMissing.has(i)),
+    extra:extra.filter((_,i)=>!usedExtra.has(i)),
+    spelling:spellingPairs,punctuation,
     originalLines:originalData.lines
   };
 }
@@ -1614,9 +1660,7 @@ return escapeHTML(word);
 html+=rendered.join(" ")+"\n";
 
 }else{
-
-globalPosition+=words.length;
-
+  globalPosition+=words.filter(word=>getComparisonKey(word)).length;
 }
 
 }
@@ -1658,6 +1702,11 @@ Extra
 <div class="stat">
 <strong>${(data.spelling||[]).length}</strong>
 Possible Spelling
+</div>
+
+<div class="stat">
+<strong>${(data.punctuation||[]).length}</strong>
+Punctuation
 </div>
 
 </div>
@@ -1745,6 +1794,13 @@ if((data.spelling||[]).length){
   html+='<h3 style="color:#9a6700">🟡 সম্ভাব্য বানান / টাইপিং পার্থক্য</h3>';
   data.spelling.forEach(item=>{
     html+=`<div class="result-item"><div class="spelling-info"><b>Original:</b> ${escapeHTML(item.original)}<br><b>Typed:</b> ${escapeHTML(item.typed)}<br><b>পরামর্শ:</b> Original-এর বানানটি যাচাই করুন<br><span class="muted">Original অবস্থান: ${item.position} | Typed অবস্থান: ${item.typedPosition}</span></div></div>`;
+  });
+}
+
+if((data.punctuation||[]).length){
+  html+='<h3 style="color:#6b4fb3">🔎 যতিচিহ্ন / Punctuation পার্থক্য</h3>';
+  data.punctuation.forEach(item=>{
+    html+=`<div class="result-item"><b>Original:</b> ${escapeHTML(item.original)}<br><b>Typed:</b> ${escapeHTML(item.typed)}<br><span class="muted">Original অবস্থান: ${item.position} | Typed অবস্থান: ${item.typedPosition}</span></div>`;
   });
 }
 
@@ -1858,7 +1914,7 @@ ${group.positions.join(", ")}
 
 }
 
-if(!data.missing.length&&!data.extra.length&&!(data.spelling||[]).length){
+if(!data.missing.length&&!data.extra.length&&!(data.spelling||[]).length&&!(data.punctuation||[]).length){
   html+='<h3 class="success">✓ দুটি লেখার শব্দ মিলে গেছে।</h3>';
 }
 
@@ -1866,7 +1922,7 @@ html+=`
 
 <p class="muted">
 
-লাল = Missing, নীল = Extra, হলুদ = সম্ভাব্য বানান/টাইপিং পার্থক্য।
+লাল = Missing, নীল = Extra, হলুদ = সম্ভাব্য বানান/টাইপিং পার্থক্য, বেগুনি = যতিচিহ্নের পার্থক্য।
 
 প্রশ্ন নম্বর ও অপশন Typed Text-এর বিন্যাস অনুযায়ী শনাক্ত করা হয়।
 
