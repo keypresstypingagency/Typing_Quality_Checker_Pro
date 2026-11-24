@@ -972,7 +972,9 @@ function showAIProviderReport(){
         <p class="${ai.needsReview ? "error" : "success"}">
           ${ai.needsReview
             ? "⚠️ AI ফলাফলে মতবিরোধ বা Provider error আছে — যাচাই প্রয়োজন"
-            : "✓ নির্বাচিত AI ফলাফলগুলো একই"}
+            : Object.keys(ai.results || {}).length < 2
+              ? "✓ একটি OCR Provider থেকে ফলাফল পাওয়া গেছে — একক ফলাফল, তুলনা করা হয়নি"
+              : "✓ নির্বাচিত OCR Provider-গুলোর ফলাফল একই"}
         </p>
         <details>
           <summary><b>Traditional OCR (Tesseract) ফলাফল দেখুন</b></summary>
