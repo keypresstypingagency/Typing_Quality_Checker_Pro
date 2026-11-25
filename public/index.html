@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Typing Quality Checker — Pro Max OCR Guard</title>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#f3f6fb;color:#172b4d;font-family:Arial,sans-serif}
-header{background:#172b4d;color:white;padding:22px 5%}
+header{background:#172b4d;color:white;padding:22px 5%;display:flex;justify-content:space-between;align-items:center;gap:15px}
 header h2{margin:0}
 main{max-width:1250px;margin:30px auto;padding:0 18px}
 .panel{background:white;padding:22px;border-radius:12px;margin-bottom:20px;border:1px solid #e1e7f0;box-shadow:0 3px 12px #172b4d08}
@@ -23,6 +25,7 @@ textarea{width:100%;min-height:350px;padding:14px;border:1px solid #ccd5e2;borde
 @keyframes scanMove{from{top:0}to{top:100%}}
 button{background:#1765d1;color:white;border:0;padding:13px 22px;border-radius:8px;cursor:pointer;font-size:15px;font-weight:bold}
 button:disabled{opacity:.5;cursor:not-allowed}
+.logout-btn{background:#dc3545;padding:9px 15px;font-size:13px}
 .center{text-align:center;margin-top:20px}
 .muted{color:#667085;font-size:13px;line-height:1.7}
 .file-list{text-align:left;margin-top:15px}
@@ -54,19 +57,64 @@ select{width:100%;padding:10px;border:1px solid #ccd5e2;border-radius:7px;backgr
 .math-setting label{font-weight:bold}
 .hidden{display:none!important}
 .warning-box{background:#fff8e8;border:1px solid #f3dfad;padding:12px;border-radius:8px;color:#795b16;margin:12px 0;line-height:1.7}
+
+/* ADMIN LOGIN */
+#loginScreen{
+max-width:420px;
+margin:90px auto;
+background:white;
+padding:30px;
+border-radius:12px;
+box-shadow:0 3px 20px #172b4d12;
+border:1px solid #e1e7f0;
+}
+#loginScreen h2{margin-top:0}
+#loginScreen input{
+width:100%;
+padding:13px;
+margin:8px 0 15px;
+border:1px solid #ccd5e2;
+border-radius:7px;
+font-size:15px;
+}
+#loginButton{width:100%}
+#loginMessage{color:#c0392b;font-size:14px;line-height:1.6}
+
 @media(max-width:750px){
 .workspace{grid-template-columns:1fr}
 .stats{grid-template-columns:repeat(2,1fr)}
 .settings{grid-template-columns:1fr}
+header{align-items:flex-start}
 }
 </style>
 </head>
 
 <body>
 
+<!-- ADMIN LOGIN SCREEN -->
+<div id="loginScreen" style="display:none">
+<h2>🔐 Admin Login</h2>
+<p class="muted">শুধুমাত্র অনুমোদিত Admin প্রবেশ করতে পারবেন।</p>
+
+<label for="adminEmail">Admin Gmail</label>
+<input type="email" id="adminEmail" placeholder="Admin Gmail">
+
+<label for="adminPassword">Password</label>
+<input type="password" id="adminPassword" placeholder="Password">
+
+<button id="loginButton" type="button">Login</button>
+<p id="loginMessage"></p>
+</div>
+
+<!-- MAIN APPLICATION -->
+<div id="appShell" style="display:none">
+
 <header>
+<div>
 <h2>✦ Typing Quality Checker</h2>
 <p style="color:#dce7f7;margin-bottom:0">Smart Document Verification System</p>
+</div>
+<button class="logout-btn" id="logoutButton" type="button">Logout</button>
 </header>
 
 <main>
@@ -215,6 +263,7 @@ Math Mode সাধারণ সংখ্যা ও গাণিতিক চি
 </section>
 
 </main>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -225,6 +274,167 @@ Math Mode সাধারণ সংখ্যা ও গাণিতিক চি
 
 <script>
 "use strict";
+
+/* =====================================
+   SUPABASE ADMIN AUTHENTICATION
+===================================== */
+
+const SUPABASE_URL = "https://dpvmgoddrbvxbmqtbawo.supabase.co";
+const SUPABASE_KEY = "sb_publishable_OygOPt7CemAPV_uK2ZweDA_RbGuVyeZ";
+const ADMIN_EMAIL = "keypresstypingagency@gmail.com";
+
+const supabaseClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
+
+const loginScreen = document.getElementById("loginScreen");
+const appShell = document.getElementById("appShell");
+const loginMessage = document.getElementById("loginMessage");
+const loginButton = document.getElementById("loginButton");
+
+let authCheckRunning = false;
+
+async function checkAdminSession(){
+
+  if(authCheckRunning) return;
+  authCheckRunning = true;
+
+  try{
+
+    const {data,error} = await supabaseClient.auth.getSession();
+
+    if(error || !data.session){
+      loginScreen.style.display = "block";
+      appShell.style.display = "none";
+      return;
+    }
+
+    const userEmail = (data.session.user.email || "").toLowerCase();
+
+    if(userEmail !== ADMIN_EMAIL.toLowerCase()){
+
+      await supabaseClient.auth.signOut();
+
+      loginScreen.style.display = "block";
+      appShell.style.display = "none";
+
+      loginMessage.textContent =
+        "এই Gmail দিয়ে প্রবেশের অনুমতি নেই।";
+
+      return;
+    }
+
+    loginScreen.style.display = "none";
+    appShell.style.display = "block";
+
+  }catch(error){
+
+    console.error("Authentication error:",error);
+
+    loginScreen.style.display = "block";
+    appShell.style.display = "none";
+
+    loginMessage.textContent =
+      "Login যাচাই করা যায়নি। আবার চেষ্টা করুন।";
+
+  }finally{
+    authCheckRunning = false;
+  }
+}
+
+loginButton.addEventListener("click",async()=>{
+
+  const email = document.getElementById("adminEmail").value.trim();
+  const password = document.getElementById("adminPassword").value;
+
+  loginMessage.textContent = "";
+
+  if(email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()){
+    loginMessage.textContent = "এই Gmail অনুমোদিত নয়।";
+    return;
+  }
+
+  if(!password){
+    loginMessage.textContent = "Password লিখুন।";
+    return;
+  }
+
+  loginButton.disabled = true;
+  loginButton.textContent = "Logging in...";
+
+  try{
+
+    const {data,error} = await supabaseClient.auth.signInWithPassword({
+      email: email,
+      password: password
+    });
+
+    if(error) throw error;
+
+    if(!data.user || (data.user.email || "").toLowerCase() !== ADMIN_EMAIL.toLowerCase()){
+      await supabaseClient.auth.signOut();
+      throw new Error("এই Gmail অনুমোদিত নয়।");
+    }
+
+    await checkAdminSession();
+
+  }catch(error){
+
+    console.error(error);
+
+    loginMessage.textContent =
+      error.message === "Invalid login credentials"
+      ? "Gmail অথবা Password ভুল হয়েছে।"
+      : (error.message || "Login করা যায়নি।");
+
+  }finally{
+
+    loginButton.disabled = false;
+    loginButton.textContent = "Login";
+
+  }
+});
+
+document.getElementById("logoutButton").addEventListener("click",async()=>{
+
+  const button = document.getElementById("logoutButton");
+
+  button.disabled = true;
+  button.textContent = "Logging out...";
+
+  try{
+    await supabaseClient.auth.signOut();
+  }catch(error){
+    console.error(error);
+  }
+
+  loginScreen.style.display = "block";
+  appShell.style.display = "none";
+
+  document.getElementById("adminPassword").value = "";
+  loginMessage.textContent = "আপনি Logout করেছেন।";
+
+  button.disabled = false;
+  button.textContent = "Logout";
+
+});
+
+supabaseClient.auth.onAuthStateChange((event,session)=>{
+
+  if(event === "SIGNED_OUT"){
+    loginScreen.style.display = "block";
+    appShell.style.display = "none";
+  }
+
+  if(event === "SIGNED_IN" || event === "TOKEN_REFRESHED"){
+    checkAdminSession();
+  }
+
+});
+
+checkAdminSession();
+
 
 /* =====================================
    ELEMENTS AND SETTINGS
@@ -346,11 +556,6 @@ suspiciousLatin,
 symbols
 };
 }
-
-/*
-বাংলা OCR-এর ক্ষেত্রে বাংলা অক্ষরকে বেশি গুরুত্ব দেওয়া হবে।
-English পৃষ্ঠার ক্ষেত্রে Latin অক্ষরও গ্রহণযোগ্য থাকবে।
-*/
 
 function getOCRScore(text,expected="ben"){
 
@@ -547,13 +752,6 @@ value.includes("syri")||
 value.includes("thaana")){
 return addMathSupport("ara+urd+fas+eng");
 }
-
-/*
-বাংলা শনাক্ত না হলেও Auto Mode-এর
-Default হিসেবে ben+eng রাখা হচ্ছে।
-OSD ভুল করে Latin বললে English-only
-OCR-এ চলে যাবে না।
-*/
 
 return getDefaultAutoLanguages();
 }
@@ -768,22 +966,9 @@ console.warn("Primary OCR failed:",languages,error);
 
 }
 
-/*
-Manual Mode:
-ব্যবহারকারী যে ভাষা নির্বাচন করেছেন,
-সেই ভাষাতেই OCR ফলাফল রাখা হবে।
-*/
-
 if(ocrModeSelect.value==="manual"){
 return firstText;
 }
-
-/*
-Auto Mode:
-বাংলা ও English-এর OCR প্রথমে পরীক্ষা।
-বাংলা কম পাওয়া গেলে শুধু বাংলা দিয়ে
-দ্বিতীয়বার চেষ্টা করা হবে।
-*/
 
 const arabicMode=languages.includes("ara");
 
@@ -828,12 +1013,6 @@ const bengaliRatio=
 totalScript?
 firstAnalysis.bengali/totalScript:
 0;
-
-/*
-বাংলা লেখা থাকার সম্ভাবনা থাকলেও
-প্রথম OCR-এ বাংলা অক্ষর না এলে
-শুধু বাংলা OCR চালানো হবে।
-*/
 
 const shouldRetryBengali=
 firstText.length<25||
@@ -894,7 +1073,6 @@ window.aiOCRCurrentPage = null;
 async function recognizeImage(blob){
   const aiToggle = document.getElementById("aiOcrEnabled");
 
-  // AI OCR is an exclusive mode: never run Tesseract or fall back to it.
   if(aiToggle && aiToggle.checked){
     if(!window.AIOCR || typeof window.AIOCR.run !== "function"){
       throw new Error("AI OCR Client লোড হয়নি। /ai-ocr-client.js পরীক্ষা করুন।");
@@ -939,12 +1117,10 @@ async function recognizeImage(blob){
         aiResult: null,
         error: error.message || "AI OCR ব্যর্থ হয়েছে"
       });
-      // Deliberately throw: no Traditional OCR fallback.
       throw new Error("AI OCR ব্যর্থ হয়েছে: " + (error.message || "অজানা সমস্যা"));
     }
   }
 
-  // AI OCR is off: preserve the previous Traditional OCR workflow.
   return await recognizeImageTraditional(blob);
 }
 
@@ -1098,9 +1274,6 @@ window.ocrNoiseItems = window.ocrNoiseItems || [];
 function filterUncorroboratedInterQuestionDigits(ocrText, nativeText, filename, pageNo){
   const source=String(ocrText||"");
   const native=String(nativeText||"");
-  // Only apply this conservative rule when the PDF has a substantial native
-  // text layer and at least two recognizable question markers. This avoids
-  // deleting genuine numbers from image-only/scanned documents.
   const questionMarks=(native.match(/[০-৯0-9]{1,2}\s*[.)।]/gu)||[]).length;
   if(native.replace(/\s/g,"").length<80 || questionMarks<2){
     return {text:source,removed:[]};
@@ -1110,9 +1283,6 @@ function filterUncorroboratedInterQuestionDigits(ocrText, nativeText, filename, 
       .map(value=>value.trim())
   );
   const removed=[];
-  // A lone digit between a completed answer and the next numbered question
-  // is treated as OCR noise only if that digit is absent as a standalone
-  // token from the PDF's own text layer. The raw OCR transcript is retained.
   const pattern=/([।.!?])([ \t\n]+)([0-9০-৯])([ \t\n]+)(?=[০-৯0-9]{1,2}\s*[.)।])/gu;
   const filtered=source.replace(pattern,(full, endMark, before, digit, after, offset)=>{
     if(nativeStandaloneDigits.has(digit)) return full;
@@ -1166,9 +1336,6 @@ let nativePageText="";
 
 const aiEnabled=Boolean(document.getElementById("aiOcrEnabled")?.checked);
 
-// Read the PDF's own text layer even in AI OCR mode. It is used only as a
-// verification signal for obvious OCR hallucinations, not as a replacement
-// for the selected OCR provider's transcription.
 try{
   const content=await page.getTextContent();
   nativePageText=content.items.map(item=>item.str).filter(Boolean).join(" ");
@@ -1401,22 +1568,14 @@ return match?match[1]:null;
    TOKEN DATA
 ===================================== */
 
-/*
-  তুলনার জন্য শব্দের দুই পাশের যতিচিহ্ন/ফরম্যাটিং চিহ্ন বাদ দেওয়া হয়,
-  যাতে "লীলাভূমি" এবং "লীলাভূমি।" একই শব্দ হিসেবে মেলে।
-  বাংলা/ইংরেজি অক্ষর, সংখ্যা ও শব্দের ভেতরের চিহ্ন অক্ষত থাকে।
-  কপি করা ডকুমেন্টের Wingdings/Private-Use bullet-ও উপেক্ষা করা হয়।
-*/
 function normalizeComparisonText(value){
   let text=String(value||"").normalize("NFC")
     .replace(/[\u200B-\u200D\uFEFF]/g,"")
-    .replace(/[\u0640]/g,"")                 // Arabic tatweel
-    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g,""); // Arabic marks
+    .replace(/[\u0640]/g,"")
+    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g,"");
 
-  // Bengali yeh variants: কোথায় / কোথায়
   text=text.replace(/য\u09BC/g,"য়");
 
-  // Normalize Bengali, Arabic-Indic and Persian digits to ASCII.
   text=text.replace(/[০-৯٠-٩۰-۹]/g,ch=>{
     const cp=ch.codePointAt(0);
     if(cp>=0x09E6&&cp<=0x09EF) return String(cp-0x09E6);
@@ -1425,10 +1584,8 @@ function normalizeComparisonText(value){
     return ch;
   });
 
-  // Common Arabic/Persian keyboard variants and equivalent alef forms.
   text=text.replace(/[يىئ]/g,"ی").replace(/ك/g,"ک");
   text=text.replace(/[أإآٱ]/g,"ا");
-  // Keep meaningful Bengali consonants distinct while normalizing common forms.
   return text;
 }
 
@@ -1439,8 +1596,6 @@ function getComparisonKey(value){
 
   if(!key) return "";
 
-  // Standalone percent / decorative marks are not words; avoid OCR artefacts
-  // such as a stray '%' becoming a false Missing/Extra word.
   if(/^[%٪•·▪▫■□◆◇★☆]+$/u.test(key)) return "";
 
   if(/[A-Za-z]/.test(key)) key=key.toLocaleLowerCase("en-US");
@@ -1478,11 +1633,6 @@ function getWordData(text){
   return {lines,tokens};
 }
 
-/*
-  বাংলা/আরবি/উর্দু/ফারসি শব্দে একটি দৃশ্যমান অক্ষর একাধিক Unicode
-  code point দিয়ে তৈরি হতে পারে। তাই বানান তুলনায় grapheme cluster ব্যবহার করি;
-  fallback হিসেবে code point রাখা হয়েছে।
-*/
 function splitGraphemes(value){
   const text=String(value||'').normalize('NFC');
   try{
@@ -1537,9 +1687,6 @@ function isPossibleSpellingPair(originalWord,typedWord){
   if(minLen<(familyA==="bn"?2:4)||maxLen>32) return false;
   const distance=editDistance(a,b);
   const similarity=1-distance/maxLen;
-  // বাংলা OCR-এ কার/ফলা/যুক্তাক্ষরের দৃশ্যমান পার্থক্যে code point নয়,
-  // grapheme ভিত্তিক similarity কিছুটা সহনশীল রাখা হয়েছে। এটি কেবল suggestion;
-  // কখনোই Typed Text নিজে থেকে পরিবর্তন করা হয় না।
   const threshold=familyA==="bn"?(maxLen<=2?0.45:0.66):0.76;
   return distance<=spellingDistanceLimit(maxLen) && similarity>=threshold;
 }
@@ -1559,8 +1706,6 @@ function punctuationSignature(word){
   return leading+"|"+trailing;
 }
 
-// Show a short aligned context around a difference. This makes token positions
-// useful even when an earlier omission shifts every later ordinal position.
 function tokenContext(tokens,index,radius=4){
   const start=Math.max(0,index-radius);
   const end=Math.min(tokens.length,index+radius+1);
@@ -1570,6 +1715,7 @@ function tokenContext(tokens,index,radius=4){
 /* =====================================
    ADVANCED TOKEN DIFF
 ===================================== */
+
 function compareWordsFast(original,typed){
   if(!window.Diff) throw new Error("Comparison Library লোড হয়নি।");
 
@@ -1620,9 +1766,6 @@ function compareWordsFast(original,typed){
     }
   });
 
-  // A number occupying an entire source line is ambiguous: it may be a page
-  // number, a question label, or genuine numeric content. Keep it visible for
-  // human review, but do not silently classify it as a definite typing omission.
   const reviewNumbers=[];
   const definiteMissing=[];
   missing.forEach(item=>{
@@ -1762,7 +1905,6 @@ lineIndex<=group.end
 
 const rendered=words.map(word=>{
 
-// Formatting-only tokens are visible but do not shift word positions.
 if(!getComparisonKey(word)) return escapeHTML(word);
 
 const position=globalPosition++;
