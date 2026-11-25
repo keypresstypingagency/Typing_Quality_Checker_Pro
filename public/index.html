@@ -1,11 +1,10 @@
+
 <!DOCTYPE html>
 <html lang="bn">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Typing Quality Checker — Pro Max OCR Guard</title>
-
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
 <style>
 *{box-sizing:border-box}
@@ -25,7 +24,6 @@ textarea{width:100%;min-height:350px;padding:14px;border:1px solid #ccd5e2;borde
 @keyframes scanMove{from{top:0}to{top:100%}}
 button{background:#1765d1;color:white;border:0;padding:13px 22px;border-radius:8px;cursor:pointer;font-size:15px;font-weight:bold}
 button:disabled{opacity:.5;cursor:not-allowed}
-.logout-btn{background:#dc3545;padding:9px 15px;font-size:13px}
 .center{text-align:center;margin-top:20px}
 .muted{color:#667085;font-size:13px;line-height:1.7}
 .file-list{text-align:left;margin-top:15px}
@@ -58,28 +56,6 @@ select{width:100%;padding:10px;border:1px solid #ccd5e2;border-radius:7px;backgr
 .hidden{display:none!important}
 .warning-box{background:#fff8e8;border:1px solid #f3dfad;padding:12px;border-radius:8px;color:#795b16;margin:12px 0;line-height:1.7}
 
-/* ADMIN LOGIN */
-#loginScreen{
-max-width:420px;
-margin:90px auto;
-background:white;
-padding:30px;
-border-radius:12px;
-box-shadow:0 3px 20px #172b4d12;
-border:1px solid #e1e7f0;
-}
-#loginScreen h2{margin-top:0}
-#loginScreen input{
-width:100%;
-padding:13px;
-margin:8px 0 15px;
-border:1px solid #ccd5e2;
-border-radius:7px;
-font-size:15px;
-}
-#loginButton{width:100%}
-#loginMessage{color:#c0392b;font-size:14px;line-height:1.6}
-
 @media(max-width:750px){
 .workspace{grid-template-columns:1fr}
 .stats{grid-template-columns:repeat(2,1fr)}
@@ -91,30 +67,14 @@ header{align-items:flex-start}
 
 <body>
 
-<!-- ADMIN LOGIN SCREEN -->
-<div id="loginScreen" style="display:none">
-<h2>🔐 Admin Login</h2>
-<p class="muted">শুধুমাত্র অনুমোদিত Admin প্রবেশ করতে পারবেন।</p>
-
-<label for="adminEmail">Admin Gmail</label>
-<input type="email" id="adminEmail" placeholder="Admin Gmail">
-
-<label for="adminPassword">Password</label>
-<input type="password" id="adminPassword" placeholder="Password">
-
-<button id="loginButton" type="button">Login</button>
-<p id="loginMessage"></p>
-</div>
-
 <!-- MAIN APPLICATION -->
-<div id="appShell" style="display:none">
+<div id="appShell">
 
 <header>
 <div>
 <h2>✦ Typing Quality Checker</h2>
 <p style="color:#dce7f7;margin-bottom:0">Smart Document Verification System</p>
 </div>
-<button class="logout-btn" id="logoutButton" type="button">Logout</button>
 </header>
 
 <main>
@@ -274,167 +234,6 @@ Math Mode সাধারণ সংখ্যা ও গাণিতিক চি
 
 <script>
 "use strict";
-
-/* =====================================
-   SUPABASE ADMIN AUTHENTICATION
-===================================== */
-
-const SUPABASE_URL = "https://dpvmgoddrbvxbmqtbawo.supabase.co";
-const SUPABASE_KEY = "sb_publishable_OygOPt7CemAPV_uK2ZweDA_RbGuVyeZ";
-const ADMIN_EMAIL = "keypresstypingagency@gmail.com";
-
-const supabaseClient = window.supabase.createClient(
-  SUPABASE_URL,
-  SUPABASE_KEY
-);
-
-const loginScreen = document.getElementById("loginScreen");
-const appShell = document.getElementById("appShell");
-const loginMessage = document.getElementById("loginMessage");
-const loginButton = document.getElementById("loginButton");
-
-let authCheckRunning = false;
-
-async function checkAdminSession(){
-
-  if(authCheckRunning) return;
-  authCheckRunning = true;
-
-  try{
-
-    const {data,error} = await supabaseClient.auth.getSession();
-
-    if(error || !data.session){
-      loginScreen.style.display = "block";
-      appShell.style.display = "none";
-      return;
-    }
-
-    const userEmail = (data.session.user.email || "").toLowerCase();
-
-    if(userEmail !== ADMIN_EMAIL.toLowerCase()){
-
-      await supabaseClient.auth.signOut();
-
-      loginScreen.style.display = "block";
-      appShell.style.display = "none";
-
-      loginMessage.textContent =
-        "এই Gmail দিয়ে প্রবেশের অনুমতি নেই।";
-
-      return;
-    }
-
-    loginScreen.style.display = "none";
-    appShell.style.display = "block";
-
-  }catch(error){
-
-    console.error("Authentication error:",error);
-
-    loginScreen.style.display = "block";
-    appShell.style.display = "none";
-
-    loginMessage.textContent =
-      "Login যাচাই করা যায়নি। আবার চেষ্টা করুন।";
-
-  }finally{
-    authCheckRunning = false;
-  }
-}
-
-loginButton.addEventListener("click",async()=>{
-
-  const email = document.getElementById("adminEmail").value.trim();
-  const password = document.getElementById("adminPassword").value;
-
-  loginMessage.textContent = "";
-
-  if(email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()){
-    loginMessage.textContent = "এই Gmail অনুমোদিত নয়।";
-    return;
-  }
-
-  if(!password){
-    loginMessage.textContent = "Password লিখুন।";
-    return;
-  }
-
-  loginButton.disabled = true;
-  loginButton.textContent = "Logging in...";
-
-  try{
-
-    const {data,error} = await supabaseClient.auth.signInWithPassword({
-      email: email,
-      password: password
-    });
-
-    if(error) throw error;
-
-    if(!data.user || (data.user.email || "").toLowerCase() !== ADMIN_EMAIL.toLowerCase()){
-      await supabaseClient.auth.signOut();
-      throw new Error("এই Gmail অনুমোদিত নয়।");
-    }
-
-    await checkAdminSession();
-
-  }catch(error){
-
-    console.error(error);
-
-    loginMessage.textContent =
-      error.message === "Invalid login credentials"
-      ? "Gmail অথবা Password ভুল হয়েছে।"
-      : (error.message || "Login করা যায়নি।");
-
-  }finally{
-
-    loginButton.disabled = false;
-    loginButton.textContent = "Login";
-
-  }
-});
-
-document.getElementById("logoutButton").addEventListener("click",async()=>{
-
-  const button = document.getElementById("logoutButton");
-
-  button.disabled = true;
-  button.textContent = "Logging out...";
-
-  try{
-    await supabaseClient.auth.signOut();
-  }catch(error){
-    console.error(error);
-  }
-
-  loginScreen.style.display = "block";
-  appShell.style.display = "none";
-
-  document.getElementById("adminPassword").value = "";
-  loginMessage.textContent = "আপনি Logout করেছেন।";
-
-  button.disabled = false;
-  button.textContent = "Logout";
-
-});
-
-supabaseClient.auth.onAuthStateChange((event,session)=>{
-
-  if(event === "SIGNED_OUT"){
-    loginScreen.style.display = "block";
-    appShell.style.display = "none";
-  }
-
-  if(event === "SIGNED_IN" || event === "TOKEN_REFRESHED"){
-    checkAdminSession();
-  }
-
-});
-
-checkAdminSession();
-
 
 /* =====================================
    ELEMENTS AND SETTINGS
